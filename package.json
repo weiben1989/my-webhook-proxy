@@ -1,6 +1,9 @@
- "name": "tradingview-webhook-proxy",\
-  "version": "1.0.0",\
-  "description": "A proxy for TradingView webhooks with translation capabilities.",\
-  "main": "api/webhook.js",\
-  "dependencies": \{\
-    "node-fetch": "^2.6.7"\
+{
+  "name": "tradingview-webhook-proxy",
+  "version": "1.0.0",
+  "description": "A proxy for TradingView webhooks with translation capabilities.",
+  "main": "api/webhook.js",
+  "dependencies": {
+    "node-fetch": "^2.6.7"
+  }
+}
