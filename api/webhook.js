@@ -129,49 +129,47 @@ export default async function handler(req, res) {
     let finalContent = messageBody;
 
     // --- MODIFICATION START ---
-    // A precise, two-step approach to find and replace the stock code.
-    let stockCode = null;
-    let stringToReplace = '';
+    // A definitive, manual replacement approach to avoid regex replacement issues.
 
-    // Step 1: Check if the message is already formatted with a name and parenthesis. If so, do nothing.
-    // This regex looks for "标的:", then any characters, then a parenthesis with a 5-6 digit code inside.
+    // Step 1: Check if the message is already formatted. If so, do nothing.
     const alreadyFormattedMatch = messageBody.match(/标的\s*[:：].*?[（(]\s*\d{5,6}\s*[)）]/);
+    
     if (alreadyFormattedMatch) {
         console.log(`[DEBUG] Message appears to be already formatted. No action taken.`);
-        stockCode = null; // Ensure we skip the replacement logic by nullifying stockCode
     } else {
-        // Step 2: If not formatted, find a standalone code to replace.
-        // This regex captures the code (group 1) that is preceded by "标的:".
-        // The lookahead (?=[,\s]|$) ensures it's followed by a comma, space, or end of line, without capturing it.
-        const codeMatch = messageBody.match(/标的\s*[:：]\s*(\d{5,6})(?=[,\s]|$)/);
+        // Step 2: Find the unformatted code, e.g., "标的: 000819".
+        // The \b ensures we match a whole word, making it more robust.
+        const codeMatch = messageBody.match(/(标的\s*[:：]\s*)(\d{5,6})\b/);
+
         if (codeMatch) {
-            stockCode = codeMatch[1]; // The code itself, e.g., "000819"
-            stringToReplace = stockCode; // We will replace only the code number.
-            console.log(`[DEBUG] Found code to replace: '${stockCode}'`);
+            const prefix = codeMatch[1]; // The part before the code, e.g., "标的: "
+            const stockCode = codeMatch[2]; // The code itself, e.g., "000819"
+            const matchStartIndex = codeMatch.index;
+            const fullMatchString = codeMatch[0]; // The full matched part, e.g., "标的: 000819"
+
+            console.log(`[DEBUG] Found code '${stockCode}' to process.`);
+
+            const chineseName = await getChineseStockName(stockCode);
+            console.log(`[DEBUG] Fetched stock name: '${chineseName}' for code '${stockCode}'`);
+
+            if (chineseName) {
+                const replacementString = `${prefix}${chineseName} （${stockCode}）`;
+                
+                // Manual, foolproof replacement by string splitting and concatenation
+                const before = messageBody.substring(0, matchStartIndex);
+                const after = messageBody.substring(matchStartIndex + fullMatchString.length);
+                
+                finalContent = before + replacementString + after;
+                
+                console.log(`[DEBUG] Content successfully replaced.`);
+            } else {
+                console.log(`[DEBUG] No Chinese name found. Content will not be replaced.`);
+            }
+        } else {
+            console.log('[DEBUG] No replaceable stock code found.');
         }
     }
-
-    if (!stockCode && !alreadyFormattedMatch) {
-        console.log('[DEBUG] No replaceable stock code found.');
-    }
-
-    if (stockCode) {
-        const chineseName = await getChineseStockName(stockCode);
-        console.log(`[DEBUG] Fetched stock name: '${chineseName}' for code '${stockCode}'`);
-        
-        if (chineseName) {
-            // The replacement string now includes the name and the code in full-width parentheses.
-            const replacementString = `${chineseName} （${stockCode}）`;
-            // Since stringToReplace is just the code, this will result in the desired format:
-            // "标的: 000819," becomes "标的: 岳阳兴长 （000819）,"
-            finalContent = messageBody.replace(stringToReplace, replacementString);
-            console.log(`[DEBUG] Content successfully replaced.`);
-        } else {
-            console.log(`[DEBUG] No Chinese name found. Content will not be replaced.`);
-        }
-    }
     // --- MODIFICATION END ---
-
     // --- INTELLIGENT PAYLOAD FORMATTING ---
     console.log(`[DEBUG] Final content being sent: ${finalContent}`);
     let forwardResponse;
