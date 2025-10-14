@@ -93,19 +93,34 @@ async function getChineseStockName(stockCode) {
     return chineseName;
 }
 
-// --- NEW FORMATTING FUNCTION ---
-// This function takes the raw message and returns a formatted version.
-async function formatMessage(body) {
-    // Step 1: Check if the message is already formatted. If so, do nothing.
-    const alreadyFormattedMatch = body.match(/标的\s*[:：].*?[（(]\s*\d{5,6}\s*[)）]/);
-    if (alreadyFormattedMatch) {
-        console.log(`[DEBUG] Message appears to be already formatted. No action taken.`);
-        return body;
+// --- Message Processing Function ---
+// This function takes the raw message and returns a fully processed version.
+async function processMessage(body) {
+    let messageToProcess = body;
+
+    // --- Pre-formatter for single-line signals ---
+    // Detects if the signal is in a single line, e.g., "标的: 000189, 周期: 5, ..."
+    if (!messageToProcess.includes('\n') && messageToProcess.includes('标的:') && messageToProcess.includes('周期:')) {
+        console.log('[DEBUG] Single-line signal detected. Applying pre-formatting.');
+        const separator = '|||';
+        // Replace all ", " with a temporary separator
+        let tempBody = messageToProcess.replace(/, /g, separator);
+        // Specifically handle the price part which might not have a comma before it
+        tempBody = tempBody.replace(/ 当前价格:/g, `${separator}当前价格:`);
+        // Replace all separators with newlines
+        messageToProcess = tempBody.replace(new RegExp('\\' + separator, 'g'), '\n');
     }
 
-    // Step 2: Use a more robust regex with a positive lookahead.
-    // This finds the block but doesn't include the following comma/space in the match.
-    const codeMatch = body.match(/(标的\s*[:：]\s*\d{5,6})(?=[,\s]|$)/);
+    // --- Stock Name Enhancer ---
+    // Step 1: Check if the message is already name-formatted. If so, do nothing.
+    const alreadyFormattedMatch = messageToProcess.match(/标的\s*[:：].*?[（(]\s*\d{5,6}\s*[)）]/);
+    if (alreadyFormattedMatch) {
+        console.log(`[DEBUG] Message appears to be already name-formatted. No further action needed.`);
+        return messageToProcess;
+    }
+
+    // Step 2: Find the unformatted code block, e.g., "标的: 000819".
+    const codeMatch = messageToProcess.match(/(标的\s*[:：]\s*\d{5,6})(?=[,\s]|$)/);
     if (codeMatch) {
         const stringToReplace = codeMatch[0]; // e.g., "标的:  000819"
         const stockCode = stringToReplace.match(/\d{5,6}/)[0]; // Extract just the digits, e.g., "000819"
@@ -116,23 +131,20 @@ async function formatMessage(body) {
         console.log(`[DEBUG] Fetched stock name: '${chineseName}' for code '${stockCode}'`);
 
         if (chineseName) {
-            // Re-create the prefix to preserve original spacing
             const prefix = stringToReplace.substring(0, stringToReplace.indexOf(stockCode));
             const replacementString = `${prefix}${chineseName} （${stockCode}）`;
-            
-            // Replace the original block with the new formatted block
-            const newBody = body.replace(stringToReplace, replacementString);
+            const newBody = messageToProcess.replace(stringToReplace, replacementString);
             console.log(`[DEBUG] Content successfully replaced.`);
             return newBody;
         } else {
-            console.log(`[DEBUG] No Chinese name found. Content will not be replaced.`);
+            console.log(`[DEBUG] No Chinese name found. Name will not be added.`);
         }
     } else {
         console.log('[DEBUG] No replaceable stock code found.');
     }
 
-    // If no match or no name found, return the original body
-    return body;
+    // If no match or no name found, return the processed (potentially pre-formatted) body
+    return messageToProcess;
 }
 
 
@@ -169,8 +181,8 @@ export default async function handler(req, res) {
     }
     console.log(`[DEBUG] Received message body: ${messageBody}`);
 
-    // --- Apply formatting ---
-    const finalContent = await formatMessage(messageBody);
+    // --- Apply all processing ---
+    const finalContent = await processMessage(messageBody);
 
     // --- INTELLIGENT PAYLOAD FORMATTING ---
     console.log(`[DEBUG] Final content being sent: ${finalContent}`);
