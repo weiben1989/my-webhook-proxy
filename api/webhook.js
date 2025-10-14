@@ -46,6 +46,7 @@ async function getStockNameFromSina(stockCode, marketPrefix) {
         }
         return null;
     } catch (error) {
+        console.error(`[DEBUG] Sina API call failed for ${stockCode}`, error);
         return null;
     }
 }
@@ -66,6 +67,7 @@ async function getStockNameFromTencent(stockCode, marketPrefix) {
         }
         return null;
     } catch (error) {
+        console.error(`[DEBUG] Tencent API call failed for ${stockCode}`, error);
         return null;
     }
 }
@@ -80,7 +82,11 @@ async function getChineseStockName(stockCode) {
             marketPrefix = 'sz';
         }
     }
-    if (!marketPrefix) return null;
+    if (!marketPrefix) {
+        console.log(`[DEBUG] No market prefix found for stock code: ${stockCode}`);
+        return null;
+    }
+    console.log(`[DEBUG] Identified market '${marketPrefix}' for stock code: ${stockCode}`);
     let chineseName = await getStockNameFromSina(stockCode, marketPrefix);
     if (chineseName) return chineseName;
     chineseName = await getStockNameFromTencent(stockCode, marketPrefix);
@@ -105,7 +111,7 @@ export default async function handler(req, res) {
     }
     
     const finalWebhookUrl = proxyConfig.url;
-    const destinationType = proxyConfig.type || 'raw'; // Default to 'raw' for backward compatibility
+    const destinationType = proxyConfig.type || 'raw'; 
 
     const rawBody = (await getRawBody(req)).toString('utf8');
     
@@ -118,33 +124,44 @@ export default async function handler(req, res) {
     } catch (e) {
         messageBody = rawBody;
     }
+    console.log(`[DEBUG] Received message body: ${messageBody}`);
 
     let finalContent = messageBody;
 
     // --- MODIFICATION START ---
-    // Use a more flexible regex to capture stock codes in different formats.
-    // It now supports two main patterns:
-    // 1. `标的: ... (CODE)` - Captures the code inside parentheses.
-    // 2. `标的: CODE,` - Captures the 5-6 digit code followed by a comma or newline.
-    const stockMatch = messageBody.match(/标的:(?:[^(]*\(([^)]+)\)|[^,\n]*?(\d{5,6}))/);
+    // A more robust regex to handle variations like full-width colons [：] and different spacing.
+    // It captures either a code in parentheses (group 1) or a standalone 5-6 digit code (group 2).
+    const stockRegex = /标的\s*[:：]\s*(?:[^(]*\(([^)]+)\)|.*?(\d{5,6}))/;
+    const stockMatch = messageBody.match(stockRegex);
     
     let stockCode = null;
     if (stockMatch) {
-        // The result will be in the first or second capture group depending on the format.
+        // The code will be in either capture group 1 (from parentheses) or group 2 (standalone number).
         stockCode = (stockMatch[1] || stockMatch[2] || '').trim();
+        console.log(`[DEBUG] Regex matched. Extracted stock code: '${stockCode}'`);
+    } else {
+        console.log('[DEBUG] Regex did not find a stock code in the message.');
     }
 
     if (stockCode) {
+        // The logic to get the Chinese name is only for A-shares and HK stocks,
+        // so US stocks will be ignored as requested.
         const chineseName = await getChineseStockName(stockCode);
+        console.log(`[DEBUG] Fetched stock name: '${chineseName}' for code '${stockCode}'`);
         if (chineseName) {
-            // Use a more robust replacement to handle both formats cleanly.
-            // This replaces the entire line starting with "标的:"
-            finalContent = messageBody.replace(/标的:[^\n]*/, `标的: ${chineseName} (${stockCode})`);
-        }
+            // Precise replacement: Replace only the matched part (e.g., "标的: 159565" or "标的: xx (123456)")
+            // This prevents deleting other information on the same line.
+            const matchedString = stockMatch[0];
+            finalContent = messageBody.replace(matchedString, `标的: ${chineseName} (${stockCode})`);
+            console.log(`[DEBUG] Content successfully replaced.`);
+        } else {
+            console.log(`[DEBUG] No Chinese name found. Content will not be replaced.`);
+        }
     }
     // --- MODIFICATION END ---
 
     // --- INTELLIGENT PAYLOAD FORMATTING ---
+    console.log(`[DEBUG] Final content being sent: ${finalContent}`);
     let forwardResponse;
     if (destinationType === 'wecom') {
         // Format for Enterprise WeChat (WeCom)
@@ -158,7 +175,7 @@ export default async function handler(req, res) {
             body: JSON.stringify(payload),
         });
     } else {
-        // Default to raw text for "饭碗警告" and other generic services
+        // Default to raw text
         forwardResponse = await fetch(finalWebhookUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain; charset=utf-8' },
@@ -167,13 +184,16 @@ export default async function handler(req, res) {
     }
 
     if (!forwardResponse.ok) {
-        console.error(`[PROXY] Failed to forward. Key: ${proxyKey}, Type: ${destinationType}, Status: ${forwardResponse.status}`);
-    }
+        console.error(`[PROXY] Failed to forward. Key: ${proxyKey}, Type: ${destinationType}, Status: ${forwardResponse.status}, Body: ${await forwardResponse.text()}`);
+    } else {
+        console.log(`[PROXY] Successfully forwarded alert for key '${proxyKey}'.`);
+    }
 
     return res.status(200).json({ success: true, message: `Alert processed for key '${proxyKey}'.` });
 
   } catch (error) {
-    console.error('Webhook Error:', error.message);
+    console.error('Webhook Error:', error.message, error.stack);
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 }
+
