@@ -95,14 +95,33 @@ async function getChineseStockName(stockCode) {
 async function processMessage(body) {
     let messageToProcess = body;
 
-    // --- Pre-formatter for single-line signals ---
+    // --- Pre-formatter for single-line signals (Robust Version) ---
     if (!messageToProcess.includes('\n') && messageToProcess.includes('标的:') && messageToProcess.includes(',')) {
-        console.log('[DEBUG] Single-line signal detected. Applying multi-line formatting.');
-        const separator = '|||';
-        let tempBody = messageToProcess.replace(/, /g, separator);
-        tempBody = tempBody.replace(/ 当前价格:/g, `${separator}当前价格:`);
-        messageToProcess = tempBody.replace(new RegExp('\\' + separator, 'g'), '\n');
+        console.log('[DEBUG] Single-line signal detected. Applying robust multi-line formatting.');
+        
+        const separator = '|||SPLIT|||';
+        let tempBody = messageToProcess;
+        
+        // Keywords that should always start a new line
+        const keywords = ['周期:', '信号:', '级别:', '交易所时间:', '价格:', '原因:', '当前价格:'];
+        
+        // Protect keywords by prepending the separator, consuming any leading comma/space
+        keywords.forEach(keyword => {
+            const regex = new RegExp(`[\\s,]*(${keyword})`, 'g');
+            tempBody = tempBody.replace(regex, `${separator}$1`);
+        });
+        
+        // Replace any remaining commas with the separator
+        tempBody = tempBody.replace(/,\s*/g, separator);
+        
+        // Split, trim, filter out empty lines, and rejoin
+        messageToProcess = tempBody.split(separator)
+                                    .map(line => line.trim())
+                                    .filter(line => line)
+                                    .join('\n');
+        console.log(`[DEBUG] Pre-formatted message:\n${messageToProcess}`);
     }
+
 
     // --- Stock Name Enhancer ---
     const alreadyFormattedMatch = messageToProcess.match(/标的\s*[:：].*?[（(]\s*\d{5,6}\s*[)）]/);
@@ -111,7 +130,6 @@ async function processMessage(body) {
         return messageToProcess;
     }
 
-    // This regex is now more tolerant and finds the code block regardless of what follows.
     const codeMatch = messageToProcess.match(/(标的\s*[:：]\s*\d{5,6})/);
     if (codeMatch) {
         const stringToReplace = codeMatch[0];
@@ -209,5 +227,4 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 }
-
 
