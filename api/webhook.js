@@ -66,7 +66,12 @@ async function getRawBody(req) {
 async function getStockNameFromSina(stockCode, marketPrefix) {
     const url = `https://hq.sinajs.cn/list=${marketPrefix}${stockCode}`;
     try {
-        const response = await fetch(url, { timeout: 3000 });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1500); // 缩短到1.5秒
+        
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        
         if (!response.ok) return null;
         const responseBuffer = await response.arrayBuffer();
         const responseText = new TextDecoder('gbk').decode(responseBuffer);
@@ -87,7 +92,12 @@ async function getStockNameFromTencent(stockCode, marketPrefix) {
     }
     const url = `https://qt.gtimg.cn/q=${marketPrefix}${finalStockCode}`;
     try {
-        const response = await fetch(url, { timeout: 3000 });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1500); // 缩短到1.5秒
+        
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        
         if (!response.ok) return null;
         const responseBuffer = await response.arrayBuffer();
         const responseText = new TextDecoder('gbk').decode(responseBuffer);
