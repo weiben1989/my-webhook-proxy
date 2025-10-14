@@ -103,9 +103,9 @@ async function formatMessage(body) {
         return body;
     }
 
-    // Step 2: Find the unformatted code, e.g., "标的: 000819".
-    // This regex finds the entire block to be replaced.
-    const codeMatch = body.match(/(标的\s*[:：]\s*\d{5,6})\b/);
+    // Step 2: Use a more robust regex with a positive lookahead.
+    // This finds the block but doesn't include the following comma/space in the match.
+    const codeMatch = body.match(/(标的\s*[:：]\s*\d{5,6})(?=[,\s]|$)/);
     if (codeMatch) {
         const stringToReplace = codeMatch[0]; // e.g., "标的:  000819"
         const stockCode = stringToReplace.match(/\d{5,6}/)[0]; // Extract just the digits, e.g., "000819"
