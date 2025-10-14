@@ -1,26 +1,21 @@
 import fetch from "node-fetch";
 import { URL } from 'url';
 
-// Vercel/Next.js API route config
 export const config = {
   api: {
     bodyParser: false,
   },
 };
 
-// --- Webhook Configuration ---
 let webhookMap = {};
 try {
     if (process.env.WEBHOOK_CONFIG) {
         webhookMap = JSON.parse(process.env.WEBHOOK_CONFIG);
-    } else {
-        console.warn("WARN: WEBHOOK_CONFIG environment variable is not set.");
     }
 } catch (error) {
-    console.error("FATAL: Could not parse WEBHOOK_CONFIG. Please check its JSON format.", error);
+    console.error("Config parse error:", error);
 }
 
-// Helper function to read the raw request body
 async function getRawBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -30,7 +25,6 @@ async function getRawBody(req) {
   });
 }
 
-// --- Stock Name API Helpers ---
 async function getStockNameFromSina(stockCode, marketPrefix) {
     const url = `https://hq.sinajs.cn/list=${marketPrefix}${stockCode}`;
     try {
@@ -44,7 +38,6 @@ async function getStockNameFromSina(stockCode, marketPrefix) {
         }
         return null;
     } catch (error) {
-        console.error(`[DEBUG] Sina API call failed for ${stockCode}`, error);
         return null;
     }
 }
@@ -66,7 +59,6 @@ async function getStockNameFromTencent(stockCode, marketPrefix) {
         }
         return null;
     } catch (error) {
-        console.error(`[DEBUG] Tencent API call failed for ${stockCode}`, error);
         return null;
     }
 }
@@ -82,113 +74,72 @@ async function getChineseStockName(stockCode) {
             marketPrefix = 'sz';
         }
     }
-    if (!marketPrefix) {
-        console.log(`[DEBUG] No market prefix found for stock code: ${stockCode}.`);
-        return null;
-    }
-    console.log(`[DEBUG] Identified market '${marketPrefix}' for stock code: ${stockCode}`);
+    if (!marketPrefix) return null;
+    
     let chineseName = await getStockNameFromSina(stockCode, marketPrefix);
     if (chineseName) return chineseName;
+    
     chineseName = await getStockNameFromTencent(stockCode, marketPrefix);
     return chineseName;
 }
 
-// --- Message Processing Function with Debug Info ---
-async function processMessage(body) {
-    let debugReport = [];
-    debugReport.push(`1. Original Body (raw):\n---\n${body}\n---`);
-    debugReport.push(`2. Body as Hex to see hidden chars:\n---\n${Buffer.from(body).toString('hex')}\n---`);
+async function processMessage(body, debugLog) {
+    debugLog.push(`Processing body: ${body}`);
     
-    let messageToProcess = body;
-    let finalContent = messageToProcess;
-
-    // --- 改进的单行处理器 ---
-    // 这个正则现在可以匹配: "标的: 159565, 周期: 5..." 这种格式
-    // 允许标的和代码之间有空格，并且代码后面可以跟逗号
-    const singleLineMatch = messageToProcess.match(/^标的\s*[:：]\s*(\d{5,6})\s*[,，]?\s*(.*)$/);
+    const match = body.match(/标的\s*[:：]\s*(\d{5,6})/);
     
-    if (singleLineMatch && !messageToProcess.includes('\n')) {
-        debugReport.push("3. Special Single-Line Processor Triggered: YES");
-        
-        const stockCode = singleLineMatch[1];        // "159565"
-        let remainderPart = singleLineMatch[2];      // "周期: 5, 旗开得胜买信号!..."
-        
-        debugReport.push(`4. Found Code: '${stockCode}'`);
-        
-        // 清理开头的逗号和空格
-        remainderPart = remainderPart.replace(/^[,，\s]+/, '');
-
-        // 获取股票中文名称
-        const chineseName = await getChineseStockName(stockCode);
-        debugReport.push(`5. API Result for '${stockCode}': '${chineseName || 'FAILED'}'`);
-
-        let formattedStockLine;
-        if (chineseName) {
-            formattedStockLine = `标的:${chineseName}(${stockCode})`;
-        } else {
-            formattedStockLine = `标的:(${stockCode})`;
-        }
-        
-        // 组合格式化后的内容
-        finalContent = `${formattedStockLine}\n${remainderPart}`;
-        debugReport.push(`6. Final Formatted Content:\n---\n${finalContent}\n---`);
-
-    } else {
-        // --- 多行消息的回退处理 ---
-        debugReport.push("3. Special Single-Line Processor Triggered: NO. Using standard multi-line enhancer.");
-        
-        const alreadyFormattedMatch = messageToProcess.match(/标的\s*[:：].*?[（(]\s*\d{5,6}\s*[)）]/);
-        if (alreadyFormattedMatch) {
-            debugReport.push("5. Name Enhancer: SKIPPED (already formatted).");
-            finalContent = messageToProcess;
-        } else {
-            const codeMatch = messageToProcess.match(/(标的\s*[:：]\s*\d{5,6})/);
-            if (codeMatch) {
-                const stringToReplace = codeMatch[0];
-                const stockCode = stringToReplace.match(/\d{5,6}/)[0];
-                debugReport.push(`5. Name Enhancer: FOUND code '${stockCode}'.`);
-
-                const chineseName = await getChineseStockName(stockCode);
-                if (chineseName) {
-                    debugReport.push(`6. API Result: SUCCESS, found name '${chineseName}'.`);
-                    const prefix = stringToReplace.substring(0, stringToReplace.indexOf(stockCode));
-                    const replacementString = `${prefix.trim()} ${chineseName}（${stockCode}）`;
-                    finalContent = messageToProcess.replace(stringToReplace, replacementString);
-                } else {
-                    debugReport.push(`6. API Result: FAILED, no name found.`);
-                }
-            } else {
-                debugReport.push("5. Name Enhancer: SKIPPED (no code found).");
-            }
-        }
+    if (!match) {
+        debugLog.push('No stock code found');
+        return body;
     }
-
-    return { finalContent, debugInfo: debugReport.join('\n') };
+    
+    const stockCode = match[1];
+    debugLog.push(`Found stock code: ${stockCode}`);
+    
+    const chineseName = await getChineseStockName(stockCode);
+    debugLog.push(`Stock name: ${chineseName || 'NOT FOUND'}`);
+    
+    if (!chineseName) {
+        return body;
+    }
+    
+    const result = body.replace(match[0], `标的:${chineseName}(${stockCode})`);
+    debugLog.push(`Replaced result: ${result}`);
+    return result;
 }
 
-
 export default async function handler(req, res) {
+  const debugLog = [];
+  
   try {
+    debugLog.push('Handler started');
+    
     if (req.method !== 'POST') {
-      return res.status(405).json({ error: 'Method Not Allowed' });
+      debugLog.push('Not POST method');
+      return res.status(405).json({ error: 'Method Not Allowed', debug: debugLog });
     }
     
     const requestUrl = new URL(req.url, `https://${req.headers.host}`);
     const proxyKey = requestUrl.searchParams.get('key');
-    const isDebugMode = requestUrl.searchParams.get('debug') === 'true';
+    debugLog.push(`Key: ${proxyKey}`);
 
     if (!proxyKey) {
-        return res.status(400).json({ error: "Missing 'key' parameter." });
+        return res.status(400).json({ error: "Missing key", debug: debugLog });
     }
+    
     const proxyConfig = webhookMap[proxyKey];
     if (!proxyConfig || !proxyConfig.url) {
-        return res.status(404).json({ error: `Proxy key '${proxyKey}' not found or misconfigured.` });
+        debugLog.push(`Config not found for key: ${proxyKey}`);
+        debugLog.push(`Available keys: ${Object.keys(webhookMap).join(', ')}`);
+        return res.status(404).json({ error: "Key not found", debug: debugLog });
     }
     
     const finalWebhookUrl = proxyConfig.url;
-    const destinationType = proxyConfig.type || 'raw'; 
+    const destinationType = proxyConfig.type || 'raw';
+    debugLog.push(`Destination: ${destinationType} -> ${finalWebhookUrl}`);
 
     const rawBody = (await getRawBody(req)).toString('utf8');
+    debugLog.push(`Raw body: ${rawBody}`);
     
     let messageBody;
     try {
@@ -196,34 +147,24 @@ export default async function handler(req, res) {
         messageBody = Object.entries(alertData)
           .map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`)
           .join('\n');
+        debugLog.push('Parsed as JSON');
     } catch (e) {
         messageBody = rawBody;
+        debugLog.push('Using raw body');
     }
     
-    // CRITICAL FIX: Trim the body before any processing
     const trimmedBody = messageBody.trim();
-    console.log(`[DEBUG] Received and trimmed message body: ${trimmedBody}`);
+    debugLog.push(`Trimmed: ${trimmedBody}`);
 
-    // --- Apply all processing ---
-    const { finalContent, debugInfo } = await processMessage(trimmedBody);
-    
-    // --- CONFIRMATION MARKER ---
-    // Add a clear marker to confirm this specific script version is running.
-    const confirmationMarker = "[PROXY V2025-10-14-FIXED] ";
-    let messageToSend = confirmationMarker + finalContent;
-    // --- END CONFIRMATION MARKER ---
-    
-    if (isDebugMode) {
-        messageToSend += `\n\n--- 诊断报告 ---\n${debugInfo}`;
-    }
+    const processedContent = await processMessage(trimmedBody, debugLog);
+    const finalMessage = `✅ ${processedContent}`;
+    debugLog.push(`Final: ${finalMessage}`);
 
-    // --- INTELLIGENT PAYLOAD FORMATTING ---
-    console.log(`[DEBUG] Final content being sent: ${messageToSend}`);
     let forwardResponse;
     if (destinationType === 'wecom') {
         const payload = {
             msgtype: 'markdown',
-            markdown: { content: messageToSend },
+            markdown: { content: finalMessage },
         };
         forwardResponse = await fetch(finalWebhookUrl, {
             method: 'POST',
@@ -234,20 +175,39 @@ export default async function handler(req, res) {
         forwardResponse = await fetch(finalWebhookUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-            body: messageToSend,
+            body: finalMessage,
         });
     }
 
+    const responseText = await forwardResponse.text();
+    debugLog.push(`Forward status: ${forwardResponse.status}`);
+    debugLog.push(`Forward response: ${responseText}`);
+
+    // 把调试信息也输出到 console
+    console.log('DEBUG LOG:', debugLog.join(' | '));
+
     if (!forwardResponse.ok) {
-        console.error(`[PROXY] Failed to forward. Key: ${proxyKey}, Type: ${destinationType}, Status: ${forwardResponse.status}, Body: ${await forwardResponse.text()}`);
-    } else {
-        console.log(`[PROXY] Successfully forwarded alert for key '${proxyKey}'.`);
+        return res.status(500).json({ 
+            error: 'Forward failed', 
+            debug: debugLog,
+            forwardStatus: forwardResponse.status,
+            forwardResponse: responseText
+        });
     }
 
-    return res.status(200).json({ success: true, message: `Alert processed for key '${proxyKey}'.` });
+    return res.status(200).json({ 
+        success: true, 
+        processed: processedContent,
+        debug: debugLog 
+    });
 
   } catch (error) {
-    console.error('Webhook Error:', error.message, error.stack);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    debugLog.push(`Error: ${error.message}`);
+    console.error('Error:', error);
+    return res.status(500).json({ 
+        error: error.message, 
+        debug: debugLog,
+        stack: error.stack
+    });
   }
 }
