@@ -93,6 +93,49 @@ async function getChineseStockName(stockCode) {
     return chineseName;
 }
 
+// --- NEW FORMATTING FUNCTION ---
+// This function takes the raw message and returns a formatted version.
+async function formatMessage(body) {
+    // Step 1: Check if the message is already formatted. If so, do nothing.
+    const alreadyFormattedMatch = body.match(/标的\s*[:：].*?[（(]\s*\d{5,6}\s*[)）]/);
+    if (alreadyFormattedMatch) {
+        console.log(`[DEBUG] Message appears to be already formatted. No action taken.`);
+        return body;
+    }
+
+    // Step 2: Find the unformatted code, e.g., "标的: 000819".
+    // This regex finds the entire block to be replaced.
+    const codeMatch = body.match(/(标的\s*[:：]\s*\d{5,6})\b/);
+    if (codeMatch) {
+        const stringToReplace = codeMatch[0]; // e.g., "标的:  000819"
+        const stockCode = stringToReplace.match(/\d{5,6}/)[0]; // Extract just the digits, e.g., "000819"
+
+        console.log(`[DEBUG] Found code '${stockCode}' to process in block '${stringToReplace}'.`);
+        
+        const chineseName = await getChineseStockName(stockCode);
+        console.log(`[DEBUG] Fetched stock name: '${chineseName}' for code '${stockCode}'`);
+
+        if (chineseName) {
+            // Re-create the prefix to preserve original spacing
+            const prefix = stringToReplace.substring(0, stringToReplace.indexOf(stockCode));
+            const replacementString = `${prefix}${chineseName} （${stockCode}）`;
+            
+            // Replace the original block with the new formatted block
+            const newBody = body.replace(stringToReplace, replacementString);
+            console.log(`[DEBUG] Content successfully replaced.`);
+            return newBody;
+        } else {
+            console.log(`[DEBUG] No Chinese name found. Content will not be replaced.`);
+        }
+    } else {
+        console.log('[DEBUG] No replaceable stock code found.');
+    }
+
+    // If no match or no name found, return the original body
+    return body;
+}
+
+
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') {
@@ -126,50 +169,9 @@ export default async function handler(req, res) {
     }
     console.log(`[DEBUG] Received message body: ${messageBody}`);
 
-    let finalContent = messageBody;
+    // --- Apply formatting ---
+    const finalContent = await formatMessage(messageBody);
 
-    // --- MODIFICATION START ---
-    // A definitive, manual replacement approach to avoid regex replacement issues.
-
-    // Step 1: Check if the message is already formatted. If so, do nothing.
-    const alreadyFormattedMatch = messageBody.match(/标的\s*[:：].*?[（(]\s*\d{5,6}\s*[)）]/);
-    
-    if (alreadyFormattedMatch) {
-        console.log(`[DEBUG] Message appears to be already formatted. No action taken.`);
-    } else {
-        // Step 2: Find the unformatted code, e.g., "标的: 000819".
-        // This relaxed regex is more tolerant of spacing around the colon.
-        const codeMatch = messageBody.match(/(标的\s*[:：]\s*)(\d{5,6})/);
-
-        if (codeMatch) {
-            const prefix = codeMatch[1]; // The part before the code, e.g., "标的: "
-            const stockCode = codeMatch[2]; // The code itself, e.g., "000819"
-            const matchStartIndex = codeMatch.index;
-            const fullMatchString = codeMatch[0]; // The full matched part, e.g., "标的: 000819"
-
-            console.log(`[DEBUG] Found code '${stockCode}' to process.`);
-
-            const chineseName = await getChineseStockName(stockCode);
-            console.log(`[DEBUG] Fetched stock name: '${chineseName}' for code '${stockCode}'`);
-
-            if (chineseName) {
-                const replacementString = `${prefix}${chineseName} （${stockCode}）`;
-                
-                // Manual, foolproof replacement by string splitting and concatenation
-                const before = messageBody.substring(0, matchStartIndex);
-                const after = messageBody.substring(matchStartIndex + fullMatchString.length);
-                
-                finalContent = before + replacementString + after;
-                
-                console.log(`[DEBUG] Content successfully replaced.`);
-            } else {
-                console.log(`[DEBUG] No Chinese name found. Content will not be replaced.`);
-            }
-        } else {
-            console.log('[DEBUG] No replaceable stock code found.');
-        }
-    }
-    // --- MODIFICATION END ---
     // --- INTELLIGENT PAYLOAD FORMATTING ---
     console.log(`[DEBUG] Final content being sent: ${finalContent}`);
     let forwardResponse;
