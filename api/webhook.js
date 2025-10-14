@@ -83,7 +83,7 @@ async function getChineseStockName(stockCode) {
         }
     }
     if (!marketPrefix) {
-        console.log(`[DEBUG] No market prefix found for stock code: ${stockCode}`);
+        console.log(`[DEBUG] No market prefix found for stock code: ${stockCode}. (Ignoring, likely not A-share/HK)`);
         return null;
     }
     console.log(`[DEBUG] Identified market '${marketPrefix}' for stock code: ${stockCode}`);
@@ -129,30 +129,46 @@ export default async function handler(req, res) {
     let finalContent = messageBody;
 
     // --- MODIFICATION START ---
-    // A more robust regex to handle variations like full-width colons [：] and different spacing.
-    // It captures either a code in parentheses (group 1) or a standalone 5-6 digit code (group 2).
-    const stockRegex = /标的\s*[:：]\s*(?:[^(]*\(([^)]+)\)|.*?(\d{5,6}))/;
-    const stockMatch = messageBody.match(stockRegex);
-    
+    // A much more robust, two-step approach to find the stock code.
     let stockCode = null;
-    if (stockMatch) {
-        // The code will be in either capture group 1 (from parentheses) or group 2 (standalone number).
-        stockCode = (stockMatch[1] || stockMatch[2] || '').trim();
-        console.log(`[DEBUG] Regex matched. Extracted stock code: '${stockCode}'`);
-    } else {
-        console.log('[DEBUG] Regex did not find a stock code in the message.');
+    let stringToReplace = '';
+
+    // Step 1: Check for the format "标的: ... (CODE)"
+    const parenMatch = messageBody.match(/(标的\s*[:：].*?\([^)]+\))/);
+    if (parenMatch) {
+        const codeInsideParen = parenMatch[1].match(/\(([^)]+)\)/);
+        if (codeInsideParen) {
+            stockCode = codeInsideParen[1].trim();
+            stringToReplace = parenMatch[1];
+            console.log(`[DEBUG] Found parenthesis format. Code: '${stockCode}'. String to replace: '${stringToReplace}'`);
+        }
+    } 
+    
+    // Step 2: If the first format isn't found, check for "标的: CODE,"
+    if (!stockCode) {
+        // This regex is very specific: it finds "标的:", optional space/colon, and then exactly 5 or 6 digits.
+        const commaMatch = messageBody.match(/(标的\s*[:：]\s*\d{5,6})/);
+        if (commaMatch) {
+            const codeInMatch = commaMatch[1].match(/\d{5,6}/);
+            if (codeInMatch) {
+                stockCode = codeInMatch[0];
+                stringToReplace = commaMatch[1];
+                console.log(`[DEBUG] Found comma format. Code: '${stockCode}'. String to replace: '${stringToReplace}'`);
+            }
+        }
+    }
+
+    if (!stockCode) {
+        console.log('[DEBUG] No stock code found in any known format.');
     }
 
     if (stockCode) {
-        // The logic to get the Chinese name is only for A-shares and HK stocks,
-        // so US stocks will be ignored as requested.
         const chineseName = await getChineseStockName(stockCode);
         console.log(`[DEBUG] Fetched stock name: '${chineseName}' for code '${stockCode}'`);
+        
         if (chineseName) {
-            // Precise replacement: Replace only the matched part (e.g., "标的: 159565" or "标的: xx (123456)")
-            // This prevents deleting other information on the same line.
-            const matchedString = stockMatch[0];
-            finalContent = messageBody.replace(matchedString, `标的: ${chineseName} (${stockCode})`);
+            const replacementString = `标的: ${chineseName} (${stockCode})`;
+            finalContent = messageBody.replace(stringToReplace, replacementString);
             console.log(`[DEBUG] Content successfully replaced.`);
         } else {
             console.log(`[DEBUG] No Chinese name found. Content will not be replaced.`);
