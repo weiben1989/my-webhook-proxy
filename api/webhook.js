@@ -209,7 +209,12 @@ export default async function handler(req, res) {
     // --- Apply all processing ---
     const { finalContent, debugInfo } = await processMessage(trimmedBody);
     
-    let messageToSend = finalContent;
+    // --- CONFIRMATION MARKER ---
+    // Add a clear marker to confirm this specific script version is running.
+    const confirmationMarker = "[PROXY V2025-10-14 PROCESSED] ";
+    let messageToSend = confirmationMarker + finalContent;
+    // --- END CONFIRMATION MARKER ---
+    
     if (isDebugMode) {
         messageToSend += `\n\n--- 诊断报告 ---\n${debugInfo}`;
     }
@@ -248,5 +253,6 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 }
+
 
 
