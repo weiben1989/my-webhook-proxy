@@ -7,6 +7,7 @@ export const config = {
   },
 };
 
+// --- Webhook Configuration ---
 let webhookMap = {};
 try {
     if (process.env.WEBHOOK_CONFIG) {
@@ -15,6 +16,42 @@ try {
 } catch (error) {
     console.error("Config parse error:", error);
 }
+
+// --- 品种映射表 ---
+const SYMBOL_MAP = {
+    // 期货
+    'CL1!': '轻质原油期货',
+    'GC1!': '黄金期货',
+    'SI1!': '白银期货',
+    'HG1!': '铜期货',
+    'NG1!': '天然气期货',
+    'RB1!': '螺纹钢期货',
+    'IODEX': '铁矿石期货',
+    
+    // 外汇
+    'DXY': '美元指数',
+    'XAUUSD': '黄金现货/美元',
+    'XAGUSD': '白银/美元',
+    'EURUSD': '欧元/美元',
+    'GBPUSD': '英镑/美元',
+    'USDJPY': '美元/日元',
+    'AUDUSD': '澳元/美元',
+    
+    // 加密货币
+    'BTCUSDT': '比特币/USDT',
+    'BTCUSD': '比特币/美元',
+    'ETHUSDT': '以太坊/USDT',
+    'ETHUSD': '以太坊/美元',
+    
+    // 美股指数/债券
+    'US10Y': '美国10年期国债收益率',
+    'US02Y': '美国2年期国债收益率',
+    'SPX': '标普500指数',
+    'NDX': '纳斯达克100指数',
+    
+    // 其他
+    'HG_CUSD': '铜差价合约(美元/磅)',
+};
 
 async function getRawBody(req) {
   return new Promise((resolve, reject) => {
@@ -25,6 +62,7 @@ async function getRawBody(req) {
   });
 }
 
+// --- 股票名称查询（保留原有功能） ---
 async function getStockNameFromSina(stockCode, marketPrefix) {
     const url = `https://hq.sinajs.cn/list=${marketPrefix}${stockCode}`;
     try {
@@ -83,28 +121,55 @@ async function getChineseStockName(stockCode) {
     return chineseName;
 }
 
+// --- 智能识别并转换品种名称 ---
+async function getSymbolName(symbol, debugLog) {
+    debugLog.push(`Identifying symbol: ${symbol}`);
+    
+    // 1. 先检查映射表
+    if (SYMBOL_MAP[symbol]) {
+        debugLog.push(`Found in map: ${SYMBOL_MAP[symbol]}`);
+        return SYMBOL_MAP[symbol];
+    }
+    
+    // 2. 如果是纯数字，可能是股票代码
+    if (/^\d{5,6}$/.test(symbol)) {
+        debugLog.push('Detected as stock code, querying API...');
+        const stockName = await getChineseStockName(symbol);
+        if (stockName) {
+            debugLog.push(`Stock API returned: ${stockName}`);
+            return stockName;
+        }
+    }
+    
+    // 3. 都没找到，返回 null
+    debugLog.push('Symbol not found in map or API');
+    return null;
+}
+
 async function processMessage(body, debugLog) {
     debugLog.push(`Processing body: ${body}`);
     
-    const match = body.match(/标的\s*[:：]\s*(\d{5,6})/);
+    // 匹配 "标的: XXX" 格式，支持各种符号（字母、数字、感叹号等）
+    const match = body.match(/标的\s*[:：]\s*([A-Za-z0-9!_\-]+)/);
     
     if (!match) {
-        debugLog.push('No stock code found');
+        debugLog.push('No symbol pattern found');
         return body;
     }
     
-    const stockCode = match[1];
-    debugLog.push(`Found stock code: ${stockCode}`);
+    const symbol = match[1];  // 例如: "CL1!", "159565", "BTCUSDT"
+    debugLog.push(`Extracted symbol: ${symbol}`);
     
-    const chineseName = await getChineseStockName(stockCode);
-    debugLog.push(`Stock name: ${chineseName || 'NOT FOUND'}`);
+    const chineseName = await getSymbolName(symbol, debugLog);
     
     if (!chineseName) {
+        debugLog.push('No Chinese name found, returning original');
         return body;
     }
     
-    const result = body.replace(match[0], `标的:${chineseName}(${stockCode})`);
-    debugLog.push(`Replaced result: ${result}`);
+    // 替换格式: "标的: CL1!" → "标的:轻质原油期货(CL1!)"
+    const result = body.replace(match[0], `标的:${chineseName}(${symbol})`);
+    debugLog.push(`Final result: ${result}`);
     return result;
 }
 
@@ -130,13 +195,12 @@ export default async function handler(req, res) {
     const proxyConfig = webhookMap[proxyKey];
     if (!proxyConfig || !proxyConfig.url) {
         debugLog.push(`Config not found for key: ${proxyKey}`);
-        debugLog.push(`Available keys: ${Object.keys(webhookMap).join(', ')}`);
         return res.status(404).json({ error: "Key not found", debug: debugLog });
     }
     
     const finalWebhookUrl = proxyConfig.url;
     const destinationType = proxyConfig.type || 'raw';
-    debugLog.push(`Destination: ${destinationType} -> ${finalWebhookUrl}`);
+    debugLog.push(`Destination: ${destinationType}`);
 
     const rawBody = (await getRawBody(req)).toString('utf8');
     debugLog.push(`Raw body: ${rawBody}`);
@@ -154,11 +218,10 @@ export default async function handler(req, res) {
     }
     
     const trimmedBody = messageBody.trim();
-    debugLog.push(`Trimmed: ${trimmedBody}`);
 
     const processedContent = await processMessage(trimmedBody, debugLog);
     const finalMessage = `✅ ${processedContent}`;
-    debugLog.push(`Final: ${finalMessage}`);
+    debugLog.push(`Final message: ${finalMessage}`);
 
     let forwardResponse;
     if (destinationType === 'wecom') {
@@ -181,17 +244,13 @@ export default async function handler(req, res) {
 
     const responseText = await forwardResponse.text();
     debugLog.push(`Forward status: ${forwardResponse.status}`);
-    debugLog.push(`Forward response: ${responseText}`);
 
-    // 把调试信息也输出到 console
     console.log('DEBUG LOG:', debugLog.join(' | '));
 
     if (!forwardResponse.ok) {
         return res.status(500).json({ 
             error: 'Forward failed', 
-            debug: debugLog,
-            forwardStatus: forwardResponse.status,
-            forwardResponse: responseText
+            debug: debugLog
         });
     }
 
@@ -206,8 +265,7 @@ export default async function handler(req, res) {
     console.error('Error:', error);
     return res.status(500).json({ 
         error: error.message, 
-        debug: debugLog,
-        stack: error.stack
+        debug: debugLog
     });
   }
 }
