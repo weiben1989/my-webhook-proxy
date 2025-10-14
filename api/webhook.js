@@ -97,27 +97,26 @@ async function processMessage(body) {
 
     // --- Pre-formatter for single-line signals (Robust Version) ---
     if (!messageToProcess.includes('\n') && messageToProcess.includes('标的:') && messageToProcess.includes(',')) {
-        console.log('[DEBUG] Single-line signal detected. Applying robust multi-line formatting.');
+        console.log('[DEBUG] Single-line signal detected. Applying new, robust multi-line formatting.');
         
-        const separator = '|||SPLIT|||';
         let tempBody = messageToProcess;
         
         // Keywords that should always start a new line
         const keywords = ['周期:', '信号:', '级别:', '交易所时间:', '价格:', '原因:', '当前价格:'];
         
-        // Protect keywords by prepending the separator, consuming any leading comma/space
+        // Step 1: Place a newline before each keyword, consuming any leading comma/space.
         keywords.forEach(keyword => {
             const regex = new RegExp(`[\\s,]*(${keyword})`, 'g');
-            tempBody = tempBody.replace(regex, `${separator}$1`);
+            tempBody = tempBody.replace(regex, `\n$1`);
         });
         
-        // Replace any remaining commas with the separator
-        tempBody = tempBody.replace(/,\s*/g, separator);
+        // Step 2: Replace any remaining commas (with optional following space) with a newline.
+        tempBody = tempBody.replace(/,\s*/g, '\n');
         
-        // Split, trim, filter out empty lines, and rejoin
-        messageToProcess = tempBody.split(separator)
+        // Step 3: Final cleanup to ensure consistent formatting
+        messageToProcess = tempBody.split('\n')
                                     .map(line => line.trim())
-                                    .filter(line => line)
+                                    .filter(line => line) // Remove any potential empty lines
                                     .join('\n');
         console.log(`[DEBUG] Pre-formatted message:\n${messageToProcess}`);
     }
@@ -227,4 +226,5 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 }
+
 
