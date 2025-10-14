@@ -129,37 +129,30 @@ export default async function handler(req, res) {
     let finalContent = messageBody;
 
     // --- MODIFICATION START ---
-    // A much more robust, two-step approach to find the stock code.
+    // A precise, two-step approach to find and replace the stock code.
     let stockCode = null;
     let stringToReplace = '';
 
-    // Step 1: Check for the format "标的: ... (CODE)"
-    const parenMatch = messageBody.match(/(标的\s*[:：].*?\([^)]+\))/);
-    if (parenMatch) {
-        const codeInsideParen = parenMatch[1].match(/\(([^)]+)\)/);
-        if (codeInsideParen) {
-            stockCode = codeInsideParen[1].trim();
-            stringToReplace = parenMatch[1];
-            console.log(`[DEBUG] Found parenthesis format. Code: '${stockCode}'. String to replace: '${stringToReplace}'`);
-        }
-    } 
-    
-    // Step 2: If the first format isn't found, check for "标的: CODE,"
-    if (!stockCode) {
-        // This regex is very specific: it finds "标的:", optional space/colon, and then exactly 5 or 6 digits.
-        const commaMatch = messageBody.match(/(标的\s*[:：]\s*\d{5,6})/);
-        if (commaMatch) {
-            const codeInMatch = commaMatch[1].match(/\d{5,6}/);
-            if (codeInMatch) {
-                stockCode = codeInMatch[0];
-                stringToReplace = commaMatch[1];
-                console.log(`[DEBUG] Found comma format. Code: '${stockCode}'. String to replace: '${stringToReplace}'`);
-            }
+    // Step 1: Check if the message is already formatted with a name and parenthesis. If so, do nothing.
+    // This regex looks for "标的:", then any characters, then a parenthesis with a 5-6 digit code inside.
+    const alreadyFormattedMatch = messageBody.match(/标的\s*[:：].*?[（(]\s*\d{5,6}\s*[)）]/);
+    if (alreadyFormattedMatch) {
+        console.log(`[DEBUG] Message appears to be already formatted. No action taken.`);
+        stockCode = null; // Ensure we skip the replacement logic by nullifying stockCode
+    } else {
+        // Step 2: If not formatted, find a standalone code to replace.
+        // This regex captures the code (group 1) that is preceded by "标的:".
+        // The lookahead (?=[,\s]|$) ensures it's followed by a comma, space, or end of line, without capturing it.
+        const codeMatch = messageBody.match(/标的\s*[:：]\s*(\d{5,6})(?=[,\s]|$)/);
+        if (codeMatch) {
+            stockCode = codeMatch[1]; // The code itself, e.g., "000819"
+            stringToReplace = stockCode; // We will replace only the code number.
+            console.log(`[DEBUG] Found code to replace: '${stockCode}'`);
         }
     }
 
-    if (!stockCode) {
-        console.log('[DEBUG] No stock code found in any known format.');
+    if (!stockCode && !alreadyFormattedMatch) {
+        console.log('[DEBUG] No replaceable stock code found.');
     }
 
     if (stockCode) {
@@ -167,7 +160,10 @@ export default async function handler(req, res) {
         console.log(`[DEBUG] Fetched stock name: '${chineseName}' for code '${stockCode}'`);
         
         if (chineseName) {
-            const replacementString = `标的: ${chineseName} (${stockCode})`;
+            // The replacement string now includes the name and the code in full-width parentheses.
+            const replacementString = `${chineseName} （${stockCode}）`;
+            // Since stringToReplace is just the code, this will result in the desired format:
+            // "标的: 000819," becomes "标的: 岳阳兴长 （000819）,"
             finalContent = messageBody.replace(stringToReplace, replacementString);
             console.log(`[DEBUG] Content successfully replaced.`);
         } else {
