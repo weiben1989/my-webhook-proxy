@@ -138,8 +138,8 @@ export default async function handler(req, res) {
         console.log(`[DEBUG] Message appears to be already formatted. No action taken.`);
     } else {
         // Step 2: Find the unformatted code, e.g., "标的: 000819".
-        // The \b ensures we match a whole word, making it more robust.
-        const codeMatch = messageBody.match(/(标的\s*[:：]\s*)(\d{5,6})\b/);
+        // This relaxed regex is more tolerant of spacing around the colon.
+        const codeMatch = messageBody.match(/(标的\s*[:：]\s*)(\d{5,6})/);
 
         if (codeMatch) {
             const prefix = codeMatch[1]; // The part before the code, e.g., "标的: "
