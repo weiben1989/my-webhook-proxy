@@ -98,50 +98,74 @@ async function processMessage(body) {
     debugReport.push(`2. Body as Hex to see hidden chars:\n---\n${Buffer.from(body).toString('hex')}\n---`);
     
     let messageToProcess = body;
+    let finalContent = messageToProcess; // Default to original message
 
-    // --- Pre-formatter for single-line signals ---
-    if (!messageToProcess.includes('\n') && messageToProcess.includes('标的:') && messageToProcess.includes(',')) {
-        debugReport.push("3. Pre-formatter Triggered: YES");
-        let tempBody = messageToProcess;
-        const keywords = ['周期:', '信号:', '级别:', '交易所时间:', '价格:', '原因:', '当前价格:'];
-        keywords.forEach(keyword => {
-            const regex = new RegExp(`[\\s,]*(${keyword})`, 'g');
-            tempBody = tempBody.replace(regex, `\n$1`);
-        });
-        tempBody = tempBody.replace(/,\s*/g, '\n');
-        messageToProcess = tempBody.split('\n').map(line => line.trim()).filter(line => line).join('\n');
-        debugReport.push(`4. Pre-formatted Message:\n---\n${messageToProcess}\n---`);
-    } else {
-        debugReport.push("3. Pre-formatter Triggered: NO. Reason: Body already contains newline or is not a known single-line format.");
-    }
+    // --- New, Robust Single-Line Processor ---
+    // This regex specifically targets the single-line format you described.
+    // It captures the stock part and the rest of the message separately.
+    const singleLineMatch = messageToProcess.match(/^(标的\s*[:：]\s*\d{5,6})(.*)$/);
+    
+    // This logic only runs if the message is a single line AND it matches our pattern.
+    if (singleLineMatch && !messageToProcess.includes('\n')) {
+        debugReport.push("3. Special Single-Line Processor Triggered: YES");
+        
+        let stockPart = singleLineMatch[1];      // e.g., "标的: 159565"
+        let remainderPart = singleLineMatch[2]; // e.g., ", 周期: 5..."
 
-    // --- Stock Name Enhancer ---
-    const alreadyFormattedMatch = messageToProcess.match(/标的\s*[:：].*?[（(]\s*\d{5,6}\s*[)）]/);
-    if (alreadyFormattedMatch) {
-        debugReport.push("5. Name Enhancer: SKIPPED (already formatted).");
-        return { finalContent: messageToProcess, debugInfo: debugReport.join('\n') };
-    }
+        const stockCode = stockPart.match(/\d{5,6}/)[0];
+        debugReport.push(`4. Found Code: '${stockCode}'`);
 
-    const codeMatch = messageToProcess.match(/(标的\s*[:：]\s*\d{5,6})/);
-    if (codeMatch) {
-        const stringToReplace = codeMatch[0];
-        const stockCode = stringToReplace.match(/\d{5,6}/)[0];
-        debugReport.push(`5. Name Enhancer: FOUND code '${stockCode}'.`);
+        // Clean up the remainder part by removing leading comma and spaces
+        remainderPart = remainderPart.replace(/^[\s,]+/, '');
 
+        // Fetch the Chinese name for the stock
         const chineseName = await getChineseStockName(stockCode);
+        debugReport.push(`5. API Result for '${stockCode}': '${chineseName || 'FAILED'}'`);
+
+        let formattedStockLine;
         if (chineseName) {
-            debugReport.push(`6. API Result: SUCCESS, found name '${chineseName}'.`);
-            const prefix = stringToReplace.substring(0, stringToReplace.indexOf(stockCode));
-            const replacementString = `${prefix}${chineseName} （${stockCode}）`;
-            messageToProcess = messageToProcess.replace(stringToReplace, replacementString);
+            // Format as "标的:中文名(CODE)" per your request (no space, with parentheses)
+            formattedStockLine = `标的:${chineseName}(${stockCode})`;
         } else {
-            debugReport.push(`6. API Result: FAILED, no name found.`);
+            // Fallback format if name lookup fails
+            formattedStockLine = `标的:(${stockCode})`;
         }
+        
+        // Combine the newly formatted stock line with the rest of the message on a new line
+        finalContent = `${formattedStockLine}\n${remainderPart}`;
+        debugReport.push(`6. Final Formatted Content:\n---\n${finalContent}\n---`);
+
     } else {
-        debugReport.push("5. Name Enhancer: SKIPPED (no code found).");
+        // --- Fallback for multi-line messages or other formats ---
+        debugReport.push("3. Special Single-Line Processor Triggered: NO. Using standard multi-line enhancer.");
+        
+        const alreadyFormattedMatch = messageToProcess.match(/标的\s*[:：].*?[（(]\s*\d{5,6}\s*[)）]/);
+        if (alreadyFormattedMatch) {
+            debugReport.push("5. Name Enhancer: SKIPPED (already formatted).");
+            finalContent = messageToProcess;
+        } else {
+            const codeMatch = messageToProcess.match(/(标的\s*[:：]\s*\d{5,6})/);
+            if (codeMatch) {
+                const stringToReplace = codeMatch[0];
+                const stockCode = stringToReplace.match(/\d{5,6}/)[0];
+                debugReport.push(`5. Name Enhancer: FOUND code '${stockCode}'.`);
+
+                const chineseName = await getChineseStockName(stockCode);
+                if (chineseName) {
+                    debugReport.push(`6. API Result: SUCCESS, found name '${chineseName}'.`);
+                    const prefix = stringToReplace.substring(0, stringToReplace.indexOf(stockCode));
+                    const replacementString = `${prefix.trim()} ${chineseName}（${stockCode}）`;
+                    finalContent = messageToProcess.replace(stringToReplace, replacementString);
+                } else {
+                    debugReport.push(`6. API Result: FAILED, no name found.`);
+                }
+            } else {
+                debugReport.push("5. Name Enhancer: SKIPPED (no code found).");
+            }
+        }
     }
 
-    return { finalContent: messageToProcess, debugInfo: debugReport.join('\n') };
+    return { finalContent, debugInfo: debugReport.join('\n') };
 }
 
 
@@ -224,4 +248,5 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 }
+
 
