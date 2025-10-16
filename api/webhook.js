@@ -127,20 +127,41 @@ function splitAlertsGeneric(text) {
 }
 
 function parseLine(line) {
-  const stock = line.match(/标的\s*[:：]\s*([^\s,，!！]+)/)?.[1];
-  const period = line.match(/周期\s*[:：]\s*([0-9]+)/)?.[1];
-  const price = line.match(/(当前价格|价格)\s*[:：]\s*([0-9.]+)/)?.[2];
-  const indicator = line.match(/指标\s*[:：]\s*([^\s,，!！]+)/)?.[1];
-  const signal = line.match(/信号\s*[:：]\s*([^\s,，!！]+)/)?.[1] || "";
-  const direction = detectDirection(signal);
-  return { stock, period, price, indicator, signal, direction };
+  const raw = line.trim();
+  const stock = raw.match(/标的\s*[:：]\s*([^\s,，!！]+)/)?.[1];
+  const period = raw.match(/周期\s*[:：]\s*([0-9]+)/)?.[1];
+  const price = raw.match(/(当前价格|价格)\s*[:：]\s*([0-9]+(?:\.[0-9]+)?)/)?.[2];
+  const indicator = raw.match(/指标\s*[:：]\s*([^\s,，!！]+)/)?.[1];
+
+  let signal = raw.match(/信号\s*[:：]\s*([^,，!！]+)/)?.[1];
+  if (!signal) {
+    let seg = raw;
+    const idxPeriod = raw.search(/周期\s*[:：]/);
+    if (idxPeriod >= 0) {
+      const afterPeriod = raw.slice(idxPeriod);
+      const commaIdx = afterPeriod.indexOf(",");
+      seg = commaIdx >= 0 ? afterPeriod.slice(commaIdx + 1) : afterPeriod;
+    }
+    seg = seg.replace(/(当前价格|价格)\s*[:：].*$/, "")
+             .replace(/指标\s*[:：].*$/, "")
+             .trim()
+             .replace(/^[，,\s]+/, "")
+             .replace(/[，,!\s]+$/, "")
+             .trim();
+    if (seg) signal = seg;
+  }
+
+  const direction = detectDirection(signal || "");
+  return { raw, stock, period, price, signal, indicator, direction };
 }
 
 function beautifyAlerts(content) {
   const chunks = splitAlertsGeneric(content);
-  const parsed = chunks.map(parseLine).filter(p => p.stock && p.signal);
-  if (!parsed.length) return content;
-  return parsed
+  const parsed = chunks.map(parseLine);
+  const valid = parsed.filter(p => (p.stock && (p.signal || p.price)) || (p.signal && p.price));
+
+  if (!valid.length) return content;
+  return valid
     .map(p => {
       const dir = icon(p.direction);
       const prd = p.period ? ` · 周期${p.period}` : "";
