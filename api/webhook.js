@@ -1,4 +1,4 @@
-// /api/webhook.ts  —— 适配多格式信号 + 纯数字标的必查并替换中文名
+// /api/webhook.ts  —— 适配多格式信号 + 纯数字标的必查并替换中文名 (纯 JavaScript 版本)
 const fetch = require("node-fetch");
 const { URL } = require("url");
 
@@ -7,7 +7,8 @@ const config = {
 };
 
 // --- Webhook Configuration ---
-let webhookMap: Record<string, { url: string; type?: "raw" | "wecom" }> = {};
+/** @type {Record<string, {url: string, type?: 'raw'|'wecom'}>} */
+let webhookMap = {};
 try {
   if (process.env.WEBHOOK_CONFIG) webhookMap = JSON.parse(process.env.WEBHOOK_CONFIG);
 } catch {
@@ -15,11 +16,11 @@ try {
 }
 
 /* ================= 基础工具 ================= */
-function getRawBody(req: any, maxSize = 1024 * 1024): Promise<Buffer> {
+function getRawBody(req, maxSize = 1024 * 1024) {
   return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
+    const chunks = [];
     let size = 0;
-    req.on("data", (chunk: Buffer) => {
+    req.on("data", (chunk) => {
       size += chunk.length;
       if (size > maxSize) {
         reject(new Error("Payload too large"));
@@ -29,11 +30,11 @@ function getRawBody(req: any, maxSize = 1024 * 1024): Promise<Buffer> {
       chunks.push(chunk);
     });
     req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", (err: Error) => reject(err));
+    req.on("error", (err) => reject(err));
   });
 }
 
-async function fetchWithTimeout(input: any, opts: any = {}) {
+async function fetchWithTimeout(input, opts = {}) {
   const { timeout = 1500, ...rest } = opts;
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
@@ -46,7 +47,7 @@ async function fetchWithTimeout(input: any, opts: any = {}) {
   }
 }
 
-function stringifyAlertBody(raw: string) {
+function stringifyAlertBody(raw) {
   try {
     const obj = JSON.parse(raw);
     return Object.entries(obj)
@@ -60,17 +61,17 @@ function stringifyAlertBody(raw: string) {
 /* ============== A/H 名称查询（纯数字必查） ============== */
 const gbDecoder = new TextDecoder("gb18030");
 
-function padHK(code: string) {
+function padHK(code) {
   return String(code).padStart(5, "0"); // 港股 5 位
 }
 
-async function getStockNameFromSina(stockCode: string, marketPrefix: "hk" | "sh" | "sz") {
+async function getStockNameFromSina(stockCode, marketPrefix) {
   const finalCode = marketPrefix === "hk" ? padHK(stockCode) : stockCode;
   const url = `https://hq.sinajs.cn/list=${marketPrefix}${finalCode}`;
   try {
     const resp = await fetchWithTimeout(url, {
       timeout: 1500,
-      headers: { "User-Agent": "Mozilla/5.0" },
+      headers: { "User-Agent": "Mozilla.5.0" },
     });
     if (!resp.ok) return null;
     const buf = await resp.arrayBuffer();
@@ -82,13 +83,13 @@ async function getStockNameFromSina(stockCode: string, marketPrefix: "hk" | "sh"
   }
 }
 
-async function getStockNameFromTencent(stockCode: string, marketPrefix: "hk" | "sh" | "sz") {
+async function getStockNameFromTencent(stockCode, marketPrefix) {
   const finalCode = marketPrefix === "hk" ? padHK(stockCode) : stockCode;
   const url = `https://qt.gtimg.cn/q=${marketPrefix}${finalCode}`;
   try {
     const resp = await fetchWithTimeout(url, {
       timeout: 1500,
-      headers: { "User-Agent": "Mozilla/5.0" },
+      headers: { "User-Agent": "Mozilla.5.0" },
     });
     if (!resp.ok) return null;
     const buf = await resp.arrayBuffer();
@@ -101,13 +102,13 @@ async function getStockNameFromTencent(stockCode: string, marketPrefix: "hk" | "
   }
 }
 
-async function getChineseStockName(code: string) {
-  let prefix: "hk" | "sh" | "sz" | null = null;
+async function getChineseStockName(code) {
+  let prefix = null;
   if (/^\d{1,5}$/.test(code)) {
     prefix = "hk";
   } else if (/^\d{6}$/.test(code)) {
-    if (/^[56]/.test(code)) prefix = "sh";
-    else if (/^[013]/.test(code)) prefix = "sz";
+    if /^[56]/.test(code)) prefix = "sh";
+    else if /^[013]/.test(code)) prefix = "sz";
     else prefix = null;
   }
   if (!prefix) return null;
@@ -117,14 +118,14 @@ async function getChineseStockName(code: string) {
   return name || null;
 }
 
-function replaceTargets(body: string) {
+function replaceTargets(body) {
   return body.replace(/(标的\s*[:：]\s*)(\d{1,6})/g, (m, g1, code) => {
     if (!/^\d{1,6}$/.test(code)) return m;
     return `${g1}__LOOKUP__${code}__`;
   });
 }
 
-async function resolveTargets(text: string): Promise<string> {
+async function resolveTargets(text) {
   const codes = [...new Set((text.match(/__LOOKUP__(\d{1,6})__/g) || []).map(s => s.slice(10, -2)))];
   if (codes.length === 0) {
     return text;
@@ -140,24 +141,24 @@ async function resolveTargets(text: string): Promise<string> {
 }
 
 /* ============== 信号解析与展示 ============== */
-function detectDirection(s?: string) {
+function detectDirection(s) {
   const t = (s || "").toLowerCase();
   if (/(空信号|做空|空单|卖信号|short|sell|调仓空|追击空)/i.test(t)) return "short";
   if (/(多信号|做多|多单|买信号|long|buy|调仓多|追击多)/i.test(t)) return "long";
   if (/止损/i.test(t)) return "stop";
   return "neutral";
 }
-function icon(d: string) {
+function icon(d) {
   if (d === "short") return "🔴 空";
   if (d === "long") return "🟢 多";
   if (d === "stop") return "⚠️ 止损";
   return "🟦 中性";
 }
-function stripBullet(s: string) {
+function stripBullet(s) {
   return s.replace(/^[\-\u2022\*]\s+/, "").trim();
 }
 
-function splitAlertsGeneric(text: string) {
+function splitAlertsGeneric(text) {
   const t = (text || "").trim();
   if (!t) return [];
 
@@ -167,7 +168,7 @@ function splitAlertsGeneric(text: string) {
     (lines0.length >= 3 && /^[-\s]*标的\s*[:：]/.test(lines0[0]) && /^[-\s]*周期\s*[:：]/.test(lines0[1]));
 
   if (isKvCard) {
-    const fields: string[] = [];
+    const fields = [];
     for (const raw of lines0) {
       const line = stripBullet(raw);
       if (/^信号详情$/i.test(line)) continue;
@@ -177,8 +178,8 @@ function splitAlertsGeneric(text: string) {
   }
 
   const lines = t.split("\n").map(s => stripBullet(s)).filter(Boolean);
-  const blocks: string[] = [];
-  let buf: string[] = [];
+  const blocks = [];
+  let buf = [];
   const flush = () => { if (buf.length) { blocks.push(buf.join(", ")); buf = []; } };
 
   for (const line of lines) {
@@ -189,7 +190,7 @@ function splitAlertsGeneric(text: string) {
   return blocks.length ? blocks : [stripBullet(t)];
 }
 
-function parseLine(line: string) {
+function parseLine(line) {
   const raw = line.trim();
 
   const stock = raw.match(/标的\s*[:：]\s*([^\s,，!！]+)/)?.[1];
@@ -221,7 +222,7 @@ function parseLine(line: string) {
   return { raw, stock, period, price, signal, indicator, direction };
 }
 
-function beautifyAlerts(content: string) {
+function beautifyAlerts(content) {
   const chunks = splitAlertsGeneric(content);
   const parsed = chunks.map(parseLine);
   const valid = parsed.filter(p => !!p.stock && (!!p.signal || !!p.price));
@@ -229,7 +230,7 @@ function beautifyAlerts(content: string) {
 
   return valid
     .map(p => {
-      const parts: string[] = [];
+      const parts = [];
       parts.push(`${icon(p.direction)}｜${p.stock}`);
       if (p.period) parts.push(`周期${p.period}`);
       if (p.price) parts.push(`价格 ${p.price}`);
@@ -241,7 +242,7 @@ function beautifyAlerts(content: string) {
 }
 
 /* ================= 主 Handler ================= */
-module.exports = async function handler(req: any, res: any) {
+module.exports = async function handler(req, res) {
   try {
     if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
@@ -275,7 +276,7 @@ module.exports = async function handler(req: any, res: any) {
       return res.status(502).json({ error: `Forward failed: ${txt}` });
     }
     res.status(200).json({ success: true });
-  } catch (err: any) {
+  } catch (err) {
     console.error(err);
     res.status(500).json({ 
         error: "Internal Server Error", 
@@ -286,3 +287,4 @@ module.exports = async function handler(req: any, res: any) {
 }
 
 module.exports.config = config;
+
