@@ -1,6 +1,6 @@
 const fetch = require('node-fetch');
 const { AbortController } = require('abort-controller');
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+// 移除了 "import type { VercelRequest, VercelResponse } from '@vercel/node';"
 
 // Vercel 平台配置
 module.exports.config = {
@@ -42,7 +42,7 @@ const SYMBOL_MAP: Record<string, string> = {
 };
 
 // --- 工具函数 ---
-async function getRawBody(req: VercelRequest): Promise<Buffer> {
+async function getRawBody(req: any): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk) => chunks.push(chunk));
@@ -147,7 +147,8 @@ async function processMessage(body: string): Promise<string> {
 
 // --- 主处理函数 ---
 // 使用 module.exports 导出主函数
-module.exports = async function handler(req: VercelRequest, res: VercelResponse) {
+// 将 VercelRequest 和 VercelResponse 替换为 any
+module.exports = async function handler(req: any, res: any) {
   const debugLog: string[] = [];
   try {
     if (req.method !== 'POST') {
@@ -203,4 +204,5 @@ module.exports = async function handler(req: VercelRequest, res: VercelResponse)
     return res.status(500).json({ error: 'Internal Server Error', details: error.message, log: debugLog });
   }
 }
+
 
