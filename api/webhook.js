@@ -1,8 +1,8 @@
-// /api/webhook-proxy.ts  —— 适配多格式信号 + 纯数字标的必查并替换中文名
+// /api/webhook.ts  —— 适配多格式信号 + 纯数字标的必查并替换中文名
 const fetch = require("node-fetch");
 const { URL } = require("url");
 
-export const config = {
+const config = {
   api: { bodyParser: false },
 };
 
@@ -33,13 +33,14 @@ function getRawBody(req: any, maxSize = 1024 * 1024): Promise<Buffer> {
   });
 }
 
-async function fetchWithTimeout(input: RequestInfo, opts: RequestInit & { timeout?: number } = {}) {
+async function fetchWithTimeout(input: any, opts: any = {}) {
   const { timeout = 1500, ...rest } = opts;
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
+  
   try {
-    // @ts-ignore
-    return await fetch(input, { ...rest, signal: controller.signal });
+    const response = await fetch(input, { ...rest, signal: controller.signal });
+    return response;
   } finally {
     clearTimeout(id);
   }
@@ -57,7 +58,6 @@ function stringifyAlertBody(raw: string) {
 }
 
 /* ============== A/H 名称查询（纯数字必查） ============== */
-// Node18 的 TextDecoder 支持 GB18030，兼容 GBK 内容
 const gbDecoder = new TextDecoder("gb18030");
 
 function padHK(code: string) {
@@ -73,7 +73,7 @@ async function getStockNameFromSina(stockCode: string, marketPrefix: "hk" | "sh"
       headers: { "User-Agent": "Mozilla/5.0" },
     });
     if (!resp.ok) return null;
-    const buf = new Uint8Array(await resp.arrayBuffer());
+    const buf = await resp.arrayBuffer();
     const text = gbDecoder.decode(buf);
     const name = text.split('"')[1]?.split(",")[0]?.trim();
     return name || null;
@@ -91,7 +91,7 @@ async function getStockNameFromTencent(stockCode: string, marketPrefix: "hk" | "
       headers: { "User-Agent": "Mozilla/5.0" },
     });
     if (!resp.ok) return null;
-    const buf = new Uint8Array(await resp.arrayBuffer());
+    const buf = await resp.arrayBuffer();
     const text = gbDecoder.decode(buf);
     const parts = text.split("~");
     if (parts.length > 2) return parts[1]?.trim() || null;
@@ -102,9 +102,6 @@ async function getStockNameFromTencent(stockCode: string, marketPrefix: "hk" | "
 }
 
 async function getChineseStockName(code: string) {
-  // 这里严格把“纯数字标的”都做查询：
-  // - 长度 1~5 位：按港股处理（hk）
-  // - 长度 6 位：按 A 股处理（sh/sz）
   let prefix: "hk" | "sh" | "sz" | null = null;
   if (/^\d{1,5}$/.test(code)) {
     prefix = "hk";
@@ -115,13 +112,11 @@ async function getChineseStockName(code: string) {
   }
   if (!prefix) return null;
 
-  // 先新浪再腾讯
   let name = await getStockNameFromSina(code, prefix);
   if (!name) name = await getStockNameFromTencent(code, prefix);
   return name || null;
 }
 
-// 仅在“标的:”后面是**纯数字(1~6位)**时打标进行查询替换
 function replaceTargets(body: string) {
   return body.replace(/(标的\s*[:：]\s*)(\d{1,6})/g, (m, g1, code) => {
     if (!/^\d{1,6}$/.test(code)) return m;
@@ -129,29 +124,20 @@ function replaceTargets(body: string) {
   });
 }
 
-// --- 已替换为优化后的版本 ---
-// 这个函数现在可以并行查询，并且能优雅地处理查询失败的情况
 async function resolveTargets(text: string): Promise<string> {
-  // 1. 找出所有标记了要查询的代码，并去重
   const codes = [...new Set((text.match(/__LOOKUP__(\d{1,6})__/g) || []).map(s => s.slice(10, -2)))];
   if (codes.length === 0) {
     return text;
   }
 
-  // 2. 并行发起所有网络查询，等待全部结果返回
   const names = await Promise.all(codes.map(c => getChineseStockName(c)));
-  
-  // 3. 创建一个从“代码”到“名称”的映射表
   const nameMap = Object.fromEntries(codes.map((code, i) => [code, names[i]]));
 
-  // 4. 一次性替换所有占位符
   return text.replace(/__LOOKUP__(\d{1,6})__/g, (match, code) => {
     const name = nameMap[code];
-    // 如果找到了名称，就替换为 "名称(代码)"，否则就替换回代码本身
     return name ? `${name}(${code})` : code;
   });
 }
-
 
 /* ============== 信号解析与展示 ============== */
 function detectDirection(s?: string) {
@@ -168,10 +154,9 @@ function icon(d: string) {
   return "🟦 中性";
 }
 function stripBullet(s: string) {
-  return s.replace(/^[\-\u2022\*]\s+/, "").trim(); // 去掉 - / • / *
+  return s.replace(/^[\-\u2022\*]\s+/, "").trim();
 }
 
-// 专门兼容“信号详情 + 多行 KV 卡片”，否则走通用块切分
 function splitAlertsGeneric(text: string) {
   const t = (text || "").trim();
   if (!t) return [];
@@ -191,7 +176,6 @@ function splitAlertsGeneric(text: string) {
     return fields.length ? [fields.join(", ")] : [t];
   }
 
-  // 常规路径：以“标的:”为起点，直到下一个“标的:”为止
   const lines = t.split("\n").map(s => stripBullet(s)).filter(Boolean);
   const blocks: string[] = [];
   let buf: string[] = [];
@@ -199,7 +183,7 @@ function splitAlertsGeneric(text: string) {
 
   for (const line of lines) {
     if (/^标的\s*[:：]/.test(line)) { flush(); buf.push(line); }
-    else { if (buf.length === 0) continue; buf.push(line); } // 丢弃没有标的的“孤儿行”
+    else { if (buf.length === 0) continue; buf.push(line); }
   }
   flush();
   return blocks.length ? blocks : [stripBullet(t)];
@@ -208,16 +192,13 @@ function splitAlertsGeneric(text: string) {
 function parseLine(line: string) {
   const raw = line.trim();
 
-  // 基础字段
   const stock = raw.match(/标的\s*[:：]\s*([^\s,，!！]+)/)?.[1];
   const period = raw.match(/周期\s*[:：]\s*([0-9]+)/)?.[1];
   const price = raw.match(/(当前价格|价格)\s*[:：]\s*([0-9]+(?:\.[0-9]+)?)/)?.[2];
   const indicator = raw.match(/指标\s*[:：]\s*([^\s,，!！]+)/)?.[1];
 
-  // 优先：显式“信号: xxx”
   let signal = raw.match(/信号\s*[:：]\s*([^,，!！]+)/)?.[1];
 
-  // 兜底：从“周期:”之后到“价格/指标”之前的自由文本
   if (!signal) {
     let seg = raw;
     const idxPeriod = raw.search(/周期\s*[:：]/);
@@ -240,7 +221,6 @@ function parseLine(line: string) {
   return { raw, stock, period, price, signal, indicator, direction };
 }
 
-// 只输出干净列表（无标题/统计），严格要求：有“标的”且（有“信号”或“价格”）
 function beautifyAlerts(content: string) {
   const chunks = splitAlertsGeneric(content);
   const parsed = chunks.map(parseLine);
@@ -261,7 +241,7 @@ function beautifyAlerts(content: string) {
 }
 
 /* ================= 主 Handler ================= */
-export default async function handler(req: any, res: any) {
+module.exports = async function handler(req: any, res: any) {
   try {
     if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
@@ -270,27 +250,24 @@ export default async function handler(req: any, res: any) {
     const cfg = key ? webhookMap[key] : undefined;
     if (!cfg?.url) return res.status(404).json({ error: "Key not found" });
 
-    // 读取原始 body
     const rawBody = (await getRawBody(req)).toString("utf8");
     const messageBody = stringifyAlertBody(rawBody);
 
-    // ——① 标的名替换（纯数字 1~6 位必查并转中文名(代码)）——
     const marked = replaceTargets(messageBody);
     const resolved = await resolveTargets(marked);
 
-    // ——② 展示层美化（无标题，纯列表）——
     const finalText = beautifyAlerts(resolved);
 
-    // ——③ 转发——
     const isWecom = cfg.type === "wecom";
-    const resp = await fetch(cfg.url, {
+    const resp = await fetchWithTimeout(cfg.url, {
       method: "POST",
       headers: isWecom
         ? { "Content-Type": "application/json" }
         : { "Content-Type": "text/plain; charset=utf-8" },
       body: isWecom
-        ? JSON.stringify({ msgtype: "markdown", markdown: { content: finalText } })
+        ? JSON.stringify({ msgtype: "markdown", markdown: { content: finalText.replace(/\n/g, "\n\n") } })
         : finalText,
+      timeout: 3000
     });
 
     if (!resp.ok) {
@@ -300,7 +277,12 @@ export default async function handler(req: any, res: any) {
     res.status(200).json({ success: true });
   } catch (err: any) {
     console.error(err);
-    res.status(500).json({ error: err.message || "Internal Error" });
+    res.status(500).json({ 
+        error: "Internal Server Error", 
+        message: err.message,
+        name: err.name
+    });
   }
 }
 
+module.exports.config = config;
