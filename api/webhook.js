@@ -1,9 +1,9 @@
+const fetch = require('node-fetch');
+const { AbortController } = require('abort-controller');
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import fetch from 'node-fetch';
-import { AbortController } from 'abort-controller';
 
 // Vercel 平台配置
-export const config = {
+module.exports.config = {
   api: {
     bodyParser: false, // 禁用 Vercel 的默认解析器，我们自己处理原始请求体
   },
@@ -109,11 +109,6 @@ async function getChineseStockName(stockCode: string): Promise<string | null> {
 }
 
 // --- 新增：信号方向识别 ---
-/**
- * 根据消息内容判断多空方向，并返回对应的图标前缀
- * @param message 消息内容
- * @returns '🟢 ' (多), '🔴 ' (空), or '' (中性)
- */
 function getSignalPrefix(message: string): string {
   if (/(多|buy|long|看涨|做多|多头)/i.test(message)) {
     return '🟢 ';
@@ -123,7 +118,6 @@ function getSignalPrefix(message: string): string {
   }
   return ''; // 如果没有明确的多空信号，则不添加任何图标
 }
-
 
 // --- 核心消息处理逻辑 ---
 async function processMessage(body: string): Promise<string> {
@@ -152,7 +146,8 @@ async function processMessage(body: string): Promise<string> {
 }
 
 // --- 主处理函数 ---
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+// 使用 module.exports 导出主函数
+module.exports = async function handler(req: VercelRequest, res: VercelResponse) {
   const debugLog: string[] = [];
   try {
     if (req.method !== 'POST') {
@@ -208,5 +203,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: 'Internal Server Error', details: error.message, log: debugLog });
   }
 }
-
 
