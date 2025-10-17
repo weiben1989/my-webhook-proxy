@@ -1,9 +1,14 @@
 {
-  "name": "tradingview-webhook-proxy",
+  "name": "my-webhook-proxy",
   "version": "1.0.0",
-  "description": "A proxy for TradingView webhooks with translation capabilities.",
-  "main": "api/webhook.js",
+  "description": "A Vercel serverless function to process and forward trading signals.",
+  "main": "api/webhook-proxy.js",
   "dependencies": {
-    "node-fetch": "^2.6.7"
+    "node-fetch": "^2.7.0",
+    "abort-controller": "^3.0.0"
+  },
+  "devDependencies": {
+    "@vercel/node": "^3.0.0",
+    "typescript": "^5.0.0"
   }
 }
