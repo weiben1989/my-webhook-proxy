@@ -48,7 +48,8 @@ async function getRawBody(req) {
 }
 
 async function fetchWithTimeout(url, options = {}) {
-  const { timeout = 2000, ...rest } = options;
+  // 将默认超时时间从 2000ms 延长到 3500ms
+  const { timeout = 3500, ...rest } = options;
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
   try {
@@ -201,5 +202,6 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: 'Internal Server Error', details: error.message, log: debugLog });
   }
 }
+
 
 
