@@ -1,6 +1,6 @@
 // /api/webhook-proxy.ts  —— 适配多格式信号 + 纯数字标的必查并替换中文名
-import fetch from "node-fetch";
-import { URL } from "url";
+const fetch = require("node-fetch");
+const { URL } = require("url");
 
 export const config = {
   api: { bodyParser: false },
@@ -38,6 +38,7 @@ async function fetchWithTimeout(input: RequestInfo, opts: RequestInit & { timeou
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
   try {
+    // @ts-ignore
     return await fetch(input, { ...rest, signal: controller.signal });
   } finally {
     clearTimeout(id);
