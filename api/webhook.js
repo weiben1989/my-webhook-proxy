@@ -1,290 +1,281 @@
-// /api/webhook.ts  —— 适配多格式信号 + 纯数字标的必查并替换中文名 (纯 JavaScript 版本)
-const fetch = require("node-fetch");
-const { URL } = require("url");
+import fetch from "node-fetch";
+import { URL } from 'url';
 
-const config = {
-  api: { bodyParser: false },
+export const config = {
+  api: {
+    bodyParser: false,
+  },
 };
 
 // --- Webhook Configuration ---
-/** @type {Record<string, {url: string, type?: 'raw'|'wecom'}>} */
 let webhookMap = {};
 try {
-  if (process.env.WEBHOOK_CONFIG) webhookMap = JSON.parse(process.env.WEBHOOK_CONFIG);
-} catch {
-  webhookMap = {};
+    if (process.env.WEBHOOK_CONFIG) {
+        webhookMap = JSON.parse(process.env.WEBHOOK_CONFIG);
+    }
+} catch (error) {
+    console.error("Config parse error:", error);
 }
 
-/* ================= 基础工具 ================= */
-function getRawBody(req, maxSize = 1024 * 1024) {
+// --- 品种映射表 ---
+const SYMBOL_MAP = {
+    // 期货
+    'CL1!': '轻质原油期货',
+    'GC1!': '黄金期货',
+    'SI1!': '白银期货',
+    'HG1!': '铜期货',
+    'NG1!': '天然气期货',
+    'RB1!': '螺纹钢期货',
+    'IODEX': '铁矿石期货',
+    
+    // 外汇
+    'DXY': '美元指数',
+    'XAUUSD': '黄金现货/美元',
+    'XAGUSD': '白银/美元',
+    'EURUSD': '欧元/美元',
+    'GBPUSD': '英镑/美元',
+    'USDJPY': '美元/日元',
+    'AUDUSD': '澳元/美元',
+    
+    // 加密货币
+    'BTCUSDT': '比特币/USDT',
+    'BTCUSD': '比特币/美元',
+    'ETHUSDT': '以太坊/USDT',
+    'ETHUSD': '以太坊/美元',
+    
+    // 美股指数/债券
+    'US10Y': '美国10年期国债收益率',
+    'US02Y': '美国2年期国债收益率',
+    'SPX': '标普500指数',
+    'NDX': '纳斯达克100指数',
+    
+    // 其他
+    'HG_CUSD': '铜差价合约(美元/磅)',
+};
+
+async function getRawBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    let size = 0;
-    req.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > maxSize) {
-        reject(new Error("Payload too large"));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", (err) => reject(err));
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', (err) => reject(err));
   });
 }
 
-async function fetchWithTimeout(input, opts = {}) {
-  const { timeout = 1500, ...rest } = opts;
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
-  
-  try {
-    const response = await fetch(input, { ...rest, signal: controller.signal });
-    return response;
-  } finally {
-    clearTimeout(id);
-  }
-}
-
-function stringifyAlertBody(raw) {
-  try {
-    const obj = JSON.parse(raw);
-    return Object.entries(obj)
-      .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`)
-      .join("\n");
-  } catch {
-    return raw;
-  }
-}
-
-/* ============== A/H 名称查询（纯数字必查） ============== */
-const gbDecoder = new TextDecoder("gb18030");
-
-function padHK(code) {
-  return String(code).padStart(5, "0"); // 港股 5 位
-}
-
+// --- 股票名称查询（保留原有功能） ---
 async function getStockNameFromSina(stockCode, marketPrefix) {
-  const finalCode = marketPrefix === "hk" ? padHK(stockCode) : stockCode;
-  const url = `https://hq.sinajs.cn/list=${marketPrefix}${finalCode}`;
-  try {
-    const resp = await fetchWithTimeout(url, {
-      timeout: 1500,
-      headers: { "User-Agent": "Mozilla.5.0" },
-    });
-    if (!resp.ok) return null;
-    const buf = await resp.arrayBuffer();
-    const text = gbDecoder.decode(buf);
-    const name = text.split('"')[1]?.split(",")[0]?.trim();
-    return name || null;
-  } catch {
-    return null;
-  }
+    const url = `https://hq.sinajs.cn/list=${marketPrefix}${stockCode}`;
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1500); // 缩短到1.5秒
+        
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) return null;
+        const responseBuffer = await response.arrayBuffer();
+        const responseText = new TextDecoder('gbk').decode(responseBuffer);
+        const parts = responseText.split('"');
+        if (parts.length > 1 && parts[1] && parts[1].length > 1) {
+            return parts[1].split(',')[0];
+        }
+        return null;
+    } catch (error) {
+        return null;
+    }
 }
 
 async function getStockNameFromTencent(stockCode, marketPrefix) {
-  const finalCode = marketPrefix === "hk" ? padHK(stockCode) : stockCode;
-  const url = `https://qt.gtimg.cn/q=${marketPrefix}${finalCode}`;
-  try {
-    const resp = await fetchWithTimeout(url, {
-      timeout: 1500,
-      headers: { "User-Agent": "Mozilla.5.0" },
-    });
-    if (!resp.ok) return null;
-    const buf = await resp.arrayBuffer();
-    const text = gbDecoder.decode(buf);
-    const parts = text.split("~");
-    if (parts.length > 2) return parts[1]?.trim() || null;
+    let finalStockCode = stockCode;
+    if (marketPrefix === 'hk') {
+        finalStockCode = stockCode.padStart(5, '0');
+    }
+    const url = `https://qt.gtimg.cn/q=${marketPrefix}${finalStockCode}`;
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1500); // 缩短到1.5秒
+        
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) return null;
+        const responseBuffer = await response.arrayBuffer();
+        const responseText = new TextDecoder('gbk').decode(responseBuffer);
+        const parts = responseText.split('~');
+        if (parts.length > 1 && parts[1]) {
+            return parts[1];
+        }
+        return null;
+    } catch (error) {
+        return null;
+    }
+}
+
+async function getChineseStockName(stockCode) {
+    let marketPrefix;
+    if (stockCode.length <= 5 && /^\d+$/.test(stockCode)) {
+        marketPrefix = 'hk';
+    } else if (stockCode.length === 6 && /^\d+$/.test(stockCode)) {
+        if (stockCode.startsWith('6') || stockCode.startsWith('5')) {
+            marketPrefix = 'sh';
+        } else if (stockCode.startsWith('0') || stockCode.startsWith('3') || stockCode.startsWith('1')) {
+            marketPrefix = 'sz';
+        }
+    }
+    if (!marketPrefix) return null;
+    
+    let chineseName = await getStockNameFromSina(stockCode, marketPrefix);
+    if (chineseName) return chineseName;
+    
+    chineseName = await getStockNameFromTencent(stockCode, marketPrefix);
+    return chineseName;
+}
+
+// --- 智能识别并转换品种名称 ---
+async function getSymbolName(symbol, debugLog) {
+    debugLog.push(`Identifying symbol: ${symbol}`);
+    
+    // 1. 先检查映射表
+    if (SYMBOL_MAP[symbol]) {
+        debugLog.push(`Found in map: ${SYMBOL_MAP[symbol]}`);
+        return SYMBOL_MAP[symbol];
+    }
+    
+    // 2. 如果是纯数字，可能是股票代码
+    if (/^\d{5,6}$/.test(symbol)) {
+        debugLog.push('Detected as stock code, querying API...');
+        const stockName = await getChineseStockName(symbol);
+        if (stockName) {
+            debugLog.push(`Stock API returned: ${stockName}`);
+            return stockName;
+        }
+    }
+    
+    // 3. 都没找到，返回 null
+    debugLog.push('Symbol not found in map or API');
     return null;
-  } catch {
-    return null;
-  }
 }
 
-async function getChineseStockName(code) {
-  let prefix = null;
-  if (/^\d{1,5}$/.test(code)) {
-    prefix = "hk";
-  } else if (/^\d{6}$/.test(code)) {
-    if /^[56]/.test(code)) prefix = "sh";
-    else if /^[013]/.test(code)) prefix = "sz";
-    else prefix = null;
-  }
-  if (!prefix) return null;
-
-  let name = await getStockNameFromSina(code, prefix);
-  if (!name) name = await getStockNameFromTencent(code, prefix);
-  return name || null;
-}
-
-function replaceTargets(body) {
-  return body.replace(/(标的\s*[:：]\s*)(\d{1,6})/g, (m, g1, code) => {
-    if (!/^\d{1,6}$/.test(code)) return m;
-    return `${g1}__LOOKUP__${code}__`;
-  });
-}
-
-async function resolveTargets(text) {
-  const codes = [...new Set((text.match(/__LOOKUP__(\d{1,6})__/g) || []).map(s => s.slice(10, -2)))];
-  if (codes.length === 0) {
-    return text;
-  }
-
-  const names = await Promise.all(codes.map(c => getChineseStockName(c)));
-  const nameMap = Object.fromEntries(codes.map((code, i) => [code, names[i]]));
-
-  return text.replace(/__LOOKUP__(\d{1,6})__/g, (match, code) => {
-    const name = nameMap[code];
-    return name ? `${name}(${code})` : code;
-  });
-}
-
-/* ============== 信号解析与展示 ============== */
-function detectDirection(s) {
-  const t = (s || "").toLowerCase();
-  if (/(空信号|做空|空单|卖信号|short|sell|调仓空|追击空)/i.test(t)) return "short";
-  if (/(多信号|做多|多单|买信号|long|buy|调仓多|追击多)/i.test(t)) return "long";
-  if (/止损/i.test(t)) return "stop";
-  return "neutral";
-}
-function icon(d) {
-  if (d === "short") return "🔴 空";
-  if (d === "long") return "🟢 多";
-  if (d === "stop") return "⚠️ 止损";
-  return "🟦 中性";
-}
-function stripBullet(s) {
-  return s.replace(/^[\-\u2022\*]\s+/, "").trim();
-}
-
-function splitAlertsGeneric(text) {
-  const t = (text || "").trim();
-  if (!t) return [];
-
-  const lines0 = t.split("\n").map(s => s.trim()).filter(Boolean);
-  const isKvCard =
-    /^信号详情$/i.test(lines0[0] || "") ||
-    (lines0.length >= 3 && /^[-\s]*标的\s*[:：]/.test(lines0[0]) && /^[-\s]*周期\s*[:：]/.test(lines0[1]));
-
-  if (isKvCard) {
-    const fields = [];
-    for (const raw of lines0) {
-      const line = stripBullet(raw);
-      if (/^信号详情$/i.test(line)) continue;
-      if (/^(标的|周期|价格|当前价格|信号|指标)\s*[:：]/.test(line)) fields.push(line);
+async function processMessage(body, debugLog) {
+    debugLog.push(`Processing body: ${body}`);
+    
+    // 匹配 "标的: XXX" 格式，支持各种符号（字母、数字、感叹号等）
+    const match = body.match(/标的\s*[:：]\s*([A-Za-z0-9!_\-]+)/);
+    
+    if (!match) {
+        debugLog.push('No symbol pattern found');
+        return body;
     }
-    return fields.length ? [fields.join(", ")] : [t];
-  }
-
-  const lines = t.split("\n").map(s => stripBullet(s)).filter(Boolean);
-  const blocks = [];
-  let buf = [];
-  const flush = () => { if (buf.length) { blocks.push(buf.join(", ")); buf = []; } };
-
-  for (const line of lines) {
-    if (/^标的\s*[:：]/.test(line)) { flush(); buf.push(line); }
-    else { if (buf.length === 0) continue; buf.push(line); }
-  }
-  flush();
-  return blocks.length ? blocks : [stripBullet(t)];
-}
-
-function parseLine(line) {
-  const raw = line.trim();
-
-  const stock = raw.match(/标的\s*[:：]\s*([^\s,，!！]+)/)?.[1];
-  const period = raw.match(/周期\s*[:：]\s*([0-9]+)/)?.[1];
-  const price = raw.match(/(当前价格|价格)\s*[:：]\s*([0-9]+(?:\.[0-9]+)?)/)?.[2];
-  const indicator = raw.match(/指标\s*[:：]\s*([^\s,，!！]+)/)?.[1];
-
-  let signal = raw.match(/信号\s*[:：]\s*([^,，!！]+)/)?.[1];
-
-  if (!signal) {
-    let seg = raw;
-    const idxPeriod = raw.search(/周期\s*[:：]/);
-    if (idxPeriod >= 0) {
-      const afterPeriod = raw.slice(idxPeriod);
-      const commaIdx = afterPeriod.indexOf(",");
-      seg = commaIdx >= 0 ? afterPeriod.slice(commaIdx + 1) : afterPeriod;
+    
+    const symbol = match[1];  // 例如: "CL1!", "159565", "BTCUSDT"
+    debugLog.push(`Extracted symbol: ${symbol}`);
+    
+    const chineseName = await getSymbolName(symbol, debugLog);
+    
+    if (!chineseName) {
+        debugLog.push('No Chinese name found, returning original');
+        return body;
     }
-    seg = seg
-      .replace(/(当前价格|价格)\s*[:：].*$/, "")
-      .replace(/指标\s*[:：].*$/, "")
-      .replace(/^[，,\s\-]+/, "")
-      .replace(/[，,!\s\-]+$/, "")
-      .replace(/-?\s*标的\s*[:：].*$/i, "")
-      .trim();
-    if (seg) signal = seg;
-  }
-
-  const direction = detectDirection(signal);
-  return { raw, stock, period, price, signal, indicator, direction };
+    
+    // 替换格式: "标的: CL1!" → "标的:轻质原油期货(CL1!)"
+    const result = body.replace(match[0], `标的:${chineseName}(${symbol})`);
+    debugLog.push(`Final result: ${result}`);
+    return result;
 }
 
-function beautifyAlerts(content) {
-  const chunks = splitAlertsGeneric(content);
-  const parsed = chunks.map(parseLine);
-  const valid = parsed.filter(p => !!p.stock && (!!p.signal || !!p.price));
-  if (!valid.length) return content;
-
-  return valid
-    .map(p => {
-      const parts = [];
-      parts.push(`${icon(p.direction)}｜${p.stock}`);
-      if (p.period) parts.push(`周期${p.period}`);
-      if (p.price) parts.push(`价格 ${p.price}`);
-      if (p.signal) parts.push(p.signal);
-      if (p.indicator) parts.push(`指标 ${p.indicator}`);
-      return `- ${parts[0]}${parts.length > 1 ? " · " + parts.slice(1).join(" · ") : ""}`;
-    })
-    .join("\n");
-}
-
-/* ================= 主 Handler ================= */
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
+  const debugLog = [];
+  
   try {
-    if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
+    debugLog.push('Handler started');
+    
+    if (req.method !== 'POST') {
+      debugLog.push('Not POST method');
+      return res.status(405).json({ error: 'Method Not Allowed', debug: debugLog });
+    }
+    
+    const requestUrl = new URL(req.url, `https://${req.headers.host}`);
+    const proxyKey = requestUrl.searchParams.get('key');
+    debugLog.push(`Key: ${proxyKey}`);
 
-    const url = new URL(req.url, `https://${req.headers.host}`);
-    const key = url.searchParams.get("key");
-    const cfg = key ? webhookMap[key] : undefined;
-    if (!cfg?.url) return res.status(404).json({ error: "Key not found" });
+    if (!proxyKey) {
+        return res.status(400).json({ error: "Missing key", debug: debugLog });
+    }
+    
+    const proxyConfig = webhookMap[proxyKey];
+    if (!proxyConfig || !proxyConfig.url) {
+        debugLog.push(`Config not found for key: ${proxyKey}`);
+        return res.status(404).json({ error: "Key not found", debug: debugLog });
+    }
+    
+    const finalWebhookUrl = proxyConfig.url;
+    const destinationType = proxyConfig.type || 'raw';
+    debugLog.push(`Destination: ${destinationType}`);
 
-    const rawBody = (await getRawBody(req)).toString("utf8");
-    const messageBody = stringifyAlertBody(rawBody);
+    const rawBody = (await getRawBody(req)).toString('utf8');
+    debugLog.push(`Raw body: ${rawBody}`);
+    
+    let messageBody;
+    try {
+        const alertData = JSON.parse(rawBody);
+        messageBody = Object.entries(alertData)
+          .map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`)
+          .join('\n');
+        debugLog.push('Parsed as JSON');
+    } catch (e) {
+        messageBody = rawBody;
+        debugLog.push('Using raw body');
+    }
+    
+    const trimmedBody = messageBody.trim();
 
-    const marked = replaceTargets(messageBody);
-    const resolved = await resolveTargets(marked);
+    const processedContent = await processMessage(trimmedBody, debugLog);
+    const finalMessage = `✅ ${processedContent}`;
+    debugLog.push(`Final message: ${finalMessage}`);
 
-    const finalText = beautifyAlerts(resolved);
+    let forwardResponse;
+    if (destinationType === 'wecom') {
+        const payload = {
+            msgtype: 'markdown',
+            markdown: { content: finalMessage },
+        };
+        forwardResponse = await fetch(finalWebhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+    } else {
+        forwardResponse = await fetch(finalWebhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+            body: finalMessage,
+        });
+    }
 
-    const isWecom = cfg.type === "wecom";
-    const resp = await fetchWithTimeout(cfg.url, {
-      method: "POST",
-      headers: isWecom
-        ? { "Content-Type": "application/json" }
-        : { "Content-Type": "text/plain; charset=utf-8" },
-      body: isWecom
-        ? JSON.stringify({ msgtype: "markdown", markdown: { content: finalText.replace(/\n/g, "\n\n") } })
-        : finalText,
-      timeout: 3000
+    const responseText = await forwardResponse.text();
+    debugLog.push(`Forward status: ${forwardResponse.status}`);
+
+    console.log('DEBUG LOG:', debugLog.join(' | '));
+
+    if (!forwardResponse.ok) {
+        return res.status(500).json({ 
+            error: 'Forward failed', 
+            debug: debugLog
+        });
+    }
+
+    return res.status(200).json({ 
+        success: true, 
+        processed: processedContent,
+        debug: debugLog 
     });
 
-    if (!resp.ok) {
-      const txt = await resp.text();
-      return res.status(502).json({ error: `Forward failed: ${txt}` });
-    }
-    res.status(200).json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ 
-        error: "Internal Server Error", 
-        message: err.message,
-        name: err.name
+  } catch (error) {
+    debugLog.push(`Error: ${error.message}`);
+    console.error('Error:', error);
+    return res.status(500).json({ 
+        error: error.message, 
+        debug: debugLog
     });
   }
 }
-
-module.exports.config = config;
-
