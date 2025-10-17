@@ -1,4 +1,4 @@
-// /api/webhook-proxy.ts  —— 适配多格式信号 + 纯数字标的必查并替换中文名
+// /api/webhook-proxy.ts  —— 适配多格式信号 + 纯数字标的必查并替换中文名
 import fetch from "node-fetch";
 import { URL } from "url";
 
@@ -128,19 +128,29 @@ function replaceTargets(body: string) {
   });
 }
 
-async function resolveTargets(text: string) {
+// --- 已替换为优化后的版本 ---
+// 这个函数现在可以并行查询，并且能优雅地处理查询失败的情况
+async function resolveTargets(text: string): Promise<string> {
+  // 1. 找出所有标记了要查询的代码，并去重
   const codes = [...new Set((text.match(/__LOOKUP__(\d{1,6})__/g) || []).map(s => s.slice(10, -2)))];
-  for (const c of codes) {
-    const name = await getChineseStockName(c);
-    if (name) {
-      text = text.replace(new RegExp(`__LOOKUP__${c}__`, "g"), `${name}(${c})`);
-    } else {
-      // 查询不到就还原成数字代码本身
-      text = text.replace(new RegExp(`__LOOKUP__${c}__`, "g"), c);
-    }
+  if (codes.length === 0) {
+    return text;
   }
-  return text;
+
+  // 2. 并行发起所有网络查询，等待全部结果返回
+  const names = await Promise.all(codes.map(c => getChineseStockName(c)));
+  
+  // 3. 创建一个从“代码”到“名称”的映射表
+  const nameMap = Object.fromEntries(codes.map((code, i) => [code, names[i]]));
+
+  // 4. 一次性替换所有占位符
+  return text.replace(/__LOOKUP__(\d{1,6})__/g, (match, code) => {
+    const name = nameMap[code];
+    // 如果找到了名称，就替换为 "名称(代码)"，否则就替换回代码本身
+    return name ? `${name}(${code})` : code;
+  });
 }
+
 
 /* ============== 信号解析与展示 ============== */
 function detectDirection(s?: string) {
@@ -278,7 +288,7 @@ export default async function handler(req: any, res: any) {
         ? { "Content-Type": "application/json" }
         : { "Content-Type": "text/plain; charset=utf-8" },
       body: isWecom
-        ? JSON.stringify({ msgtype: "markdown", markdown: { content: finalText.replace(/\n/g, "\n\n") } })
+        ? JSON.stringify({ msgtype: "markdown", markdown: { content: finalText } })
         : finalText,
     });
 
@@ -292,3 +302,4 @@ export default async function handler(req: any, res: any) {
     res.status(500).json({ error: err.message || "Internal Error" });
   }
 }
+
