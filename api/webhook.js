@@ -1,6 +1,5 @@
 const fetch = require('node-fetch');
 const { AbortController } = require('abort-controller');
-// 移除了 "import type { VercelRequest, VercelResponse } from '@vercel/node';"
 
 // Vercel 平台配置
 module.exports.config = {
@@ -10,11 +9,8 @@ module.exports.config = {
 };
 
 // --- Webhook 配置 ---
-interface WebhookConfig {
-  url: string;
-  type?: 'wecom' | 'jubaopen' | 'raw';
-}
-let webhookMap: Record<string, WebhookConfig> = {};
+// 移除了 TypeScript 的 interface 定义
+let webhookMap = {};
 try {
   if (process.env.WEBHOOK_CONFIG) {
     webhookMap = JSON.parse(process.env.WEBHOOK_CONFIG);
@@ -24,7 +20,7 @@ try {
 }
 
 // --- 静态品种映射表 (高效) ---
-const SYMBOL_MAP: Record<string, string> = {
+const SYMBOL_MAP = {
   // 期货
   'CL1!': '轻质原油期货', 'GC1!': '黄金期货', 'SI1!': '白银期货',
   'HG1!': '铜期货', 'NG1!': '天然气期货', 'RB1!': '螺纹钢期货',
@@ -42,16 +38,16 @@ const SYMBOL_MAP: Record<string, string> = {
 };
 
 // --- 工具函数 ---
-async function getRawBody(req: any): Promise<Buffer> {
+async function getRawBody(req) {
   return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
+    const chunks = [];
     req.on('data', (chunk) => chunks.push(chunk));
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', (err) => reject(err));
   });
 }
 
-async function fetchWithTimeout(url: string, options: any = {}) {
+async function fetchWithTimeout(url, options = {}) {
   const { timeout = 2000, ...rest } = options;
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
@@ -66,7 +62,7 @@ async function fetchWithTimeout(url: string, options: any = {}) {
 // --- 股票名称查询模块 (动态) ---
 const gbDecoder = new TextDecoder('gb18030');
 
-async function getStockNameFromSina(stockCode: string, marketPrefix: string): Promise<string | null> {
+async function getStockNameFromSina(stockCode, marketPrefix) {
   const url = `https://hq.sinajs.cn/list=${marketPrefix}${stockCode}`;
   try {
     const resp = await fetchWithTimeout(url);
@@ -80,7 +76,7 @@ async function getStockNameFromSina(stockCode: string, marketPrefix: string): Pr
   }
 }
 
-async function getStockNameFromTencent(stockCode: string, marketPrefix: string): Promise<string | null> {
+async function getStockNameFromTencent(stockCode, marketPrefix) {
   const finalCode = marketPrefix === 'hk' ? stockCode.padStart(5, '0') : stockCode;
   const url = `https://qt.gtimg.cn/q=${marketPrefix}${finalCode}`;
   try {
@@ -95,8 +91,8 @@ async function getStockNameFromTencent(stockCode: string, marketPrefix: string):
   }
 }
 
-async function getChineseStockName(stockCode: string): Promise<string | null> {
-  let marketPrefix: 'sh' | 'sz' | 'hk' | null = null;
+async function getChineseStockName(stockCode) {
+  let marketPrefix = null;
   if (/^\d{1,5}$/.test(stockCode)) marketPrefix = 'hk';
   else if (/^\d{6}$/.test(stockCode)) {
     if (stockCode.startsWith('6') || stockCode.startsWith('5')) marketPrefix = 'sh';
@@ -109,7 +105,7 @@ async function getChineseStockName(stockCode: string): Promise<string | null> {
 }
 
 // --- 新增：信号方向识别 ---
-function getSignalPrefix(message: string): string {
+function getSignalPrefix(message) {
   if (/(多|buy|long|看涨|做多|多头)/i.test(message)) {
     return '🟢 ';
   }
@@ -120,7 +116,7 @@ function getSignalPrefix(message: string): string {
 }
 
 // --- 核心消息处理逻辑 ---
-async function processMessage(body: string): Promise<string> {
+async function processMessage(body) {
   const match = body.match(/标的\s*[:：]\s*([A-Za-z0-9!_.-]+)/);
   if (!match) {
     return body; // 未匹配到 "标的"，返回原文
@@ -146,16 +142,14 @@ async function processMessage(body: string): Promise<string> {
 }
 
 // --- 主处理函数 ---
-// 使用 module.exports 导出主函数
-// 将 VercelRequest 和 VercelResponse 替换为 any
-module.exports = async function handler(req: any, res: any) {
-  const debugLog: string[] = [];
+module.exports = async function handler(req, res) {
+  const debugLog = [];
   try {
     if (req.method !== 'POST') {
       return res.status(405).json({ error: 'Method Not Allowed' });
     }
 
-    const key = req.query.key as string;
+    const key = req.query.key;
     const config = key ? webhookMap[key] : undefined;
     if (!config?.url) {
       return res.status(404).json({ error: `Key '${key}' not found in configuration.` });
@@ -173,14 +167,11 @@ module.exports = async function handler(req: any, res: any) {
 
     const processedContent = await processMessage(messageBody.trim());
     
-    // 根据信号内容（多/空）决定前缀图标
     const signalPrefix = getSignalPrefix(processedContent);
     
-    // 在消息头部加上一个标记，方便识别
     const finalMessage = `${signalPrefix}[聚宝盆] ${processedContent}`;
     debugLog.push(`Final message: ${finalMessage}`);
 
-    // 根据类型决定发送格式
     const isWecom = config.type === 'wecom' || config.type === 'jubaopen';
     const resp = await fetchWithTimeout(config.url, {
       method: 'POST',
@@ -198,11 +189,10 @@ module.exports = async function handler(req: any, res: any) {
 
     return res.status(200).json({ success: true, processed: processedContent });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error("Handler Error:", error);
     debugLog.push(`Error: ${error.message}`);
     return res.status(500).json({ error: 'Internal Server Error', details: error.message, log: debugLog });
   }
 }
-
 
