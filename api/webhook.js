@@ -104,15 +104,20 @@ async function getChineseStockName(stockCode) {
   return name;
 }
 
-// --- 新增：信号方向识别 ---
+// --- 信号方向及状态识别 (已更新) ---
 function getSignalPrefix(message) {
+  // 优先判断止损或止盈信号，给予警告符号
+  if (/(止损|止盈|stop loss|take profit|sl|tp|平仓|close)/i.test(message)) {
+    return '⚠️ ';
+  }
+  // 其次判断方向信号
   if (/(多|buy|long|看涨|做多|多头)/i.test(message)) {
     return '🟢 ';
   }
   if (/(空|sell|short|看跌|做空|空头)/i.test(message)) {
     return '🔴 ';
   }
-  return ''; // 如果没有明确的多空信号，则不添加任何图标
+  return ''; // 如果没有识别到特定信号，则不添加任何图标
 }
 
 // --- 核心消息处理逻辑 ---
@@ -169,7 +174,8 @@ module.exports = async function handler(req, res) {
     
     const signalPrefix = getSignalPrefix(processedContent);
     
-    const finalMessage = `${signalPrefix}[聚宝盆] ${processedContent}`;
+    // 移除了 "[聚宝盆]"
+    const finalMessage = `${signalPrefix}${processedContent}`;
     debugLog.push(`Final message: ${finalMessage}`);
 
     const isWecom = config.type === 'wecom' || config.type === 'jubaopen';
@@ -195,4 +201,5 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: 'Internal Server Error', details: error.message, log: debugLog });
   }
 }
+
 
